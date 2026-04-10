@@ -1,0 +1,11 @@
+# Pinterest Tech Trends - Python Dependencies
+#
+# Currently stdlib-only. Add packages here as needed, then run:
+#   ./deploy.sh
+# The deploy script will sync the venv automatically.
+#
+# Examples of useful additions:
+#   requests>=2.31        # cleaner HTTP than urllib
+#   beautifulsoup4>=4.12  # better HTML parsing
+#   feedparser>=6.0       # RSS/Atom feed parsing
+#   praw>=7.7             # Reddit API (instead of scraping JSON)

@@ -15,9 +15,24 @@ Output: JSON to stdout with product data + metadata.
 The cron job agent uses this as context to compile the final report.
 """
 
+# ── Venv bootstrap ──────────────────────────────────────────────────────────
+# When Hermes runs this script via `sys.executable script.py`, it uses Hermes's
+# own Python, not our dedicated venv. This block detects that and re-execs with
+# the correct venv Python so all pip-installed dependencies are available.
+import os
+import sys
+from pathlib import Path
+
+_VENV_DIR = Path(__file__).resolve().parent / ".venv"
+_VENV_PYTHON = _VENV_DIR / "bin" / "python3"
+
+if _VENV_PYTHON.exists() and os.environ.get("_PTT_VENV_ACTIVE") != "1":
+    os.environ["_PTT_VENV_ACTIVE"] = "1"
+    os.execv(str(_VENV_PYTHON), [str(_VENV_PYTHON), *sys.argv])
+# ── End venv bootstrap ──────────────────────────────────────────────────────
+
 import json
 import re
-import sys
 import time
 import urllib.parse
 import urllib.request
