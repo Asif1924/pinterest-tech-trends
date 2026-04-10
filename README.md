@@ -20,14 +20,51 @@ Daily trending tech products scraper for the **smartypants9786** Pinterest board
 
 5. **Delivers** a formatted report to Telegram
 
-## Files
+## Project Layout
 
-| File | Purpose |
-|------|---------|
-| `trending_tech_products.py` | Data collection script — scrapes all sources, outputs JSON |
-| `cron_job.json` | Hermes Agent cron job config (schedule, prompt, delivery) |
-| `deploy.sh` | Deploys/updates the script and cron job on any machine with Hermes |
-| `.env.example` | Template for required environment variables |
+### GitHub Repo (source of truth)
+
+```
+~/pinterest-tech-trends/
+├── .env.example                  Credential template
+├── .gitignore                    Ignores secrets, caches, CSVs
+├── README.md                     Docs and setup instructions
+├── cron_job.json                 Cron schedule + AI prompt config
+├── deploy.sh                     Syncs changes to Hermes
+└── trending_tech_products.py     The scraper script
+```
+
+Remote: https://github.com/Asif1924/pinterest-tech-trends
+
+### Hermes (where it actually runs)
+
+```
+~/.hermes/
+├── scripts/
+│   └── trending_tech_products.py    ← deployed copy of the scraper
+├── cron/
+│   ├── jobs.json                    ← cron job definition (job ID: e5acea7d6609)
+│   └── output/e5acea7d6609/         ← run output logs
+└── .env                             ← credentials (EMAIL_PASSWORD, etc.)
+```
+
+### Flow
+
+```
+GitHub repo                    deploy.sh                 Hermes runtime
+~/pinterest-tech-trends/  ──────────────►  ~/.hermes/scripts/
+                                           ~/.hermes/cron/jobs.json
+                                                    │
+                                              daily 9 AM
+                                                    │
+                                                    ▼
+                                           1. Script scrapes 6 sources
+                                           2. Agent curates top 20
+                                           3. CSV emailed to alli.asif@gmail.com
+                                           4. Report sent to Telegram
+```
+
+Edit in the repo, run `./deploy.sh`, changes go live on next cron run.
 
 ## Setup
 
