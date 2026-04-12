@@ -1,10 +1,10 @@
 # Pinterest Tech Trends
 
-Daily trending tech products scraper for the **smartypants9786** Pinterest board. Finds the top 20 trending electronics, gadgets, and tech products with Amazon Associates affiliate links, product images, and ready-to-post Pinterest pin files.
+Daily trending tech products scraper for the **SmartyPants9786** Pinterest board. Finds the top 20 trending electronics, gadgets, and tech products with Amazon Associates affiliate links, product images, and ready-to-post Pinterest pin files.
 
 ## What It Does
 
-### Job 1: Trending Tech Products (every 6 hours)
+### Job 1: Trending Tech Products (every 6 hours) — AI
 
 1. **Scrapes** trending tech products from 6 sources:
    - Reddit (r/gadgets, r/technology, r/tech)
@@ -40,6 +40,22 @@ Daily trending tech products scraper for the **smartypants9786** Pinterest board
 
 **Cost: $0 per run** — entirely Python, no AI tokens used
 
+### Job 3: Pinterest Pin Uploader (1 hour after Job 2) — Mechanical browser automation
+
+1. **Scans** pending pin files (Python, free)
+
+2. **Logs into Pinterest** via browser automation
+
+3. **Uploads each pin** — fills title, description, alt text, affiliate link, image
+
+4. **Updates** pin file status to "uploaded" or "failed"
+
+5. **Delivers** upload summary to Telegram
+
+**Cost: ~$0.08 per run** — no AI creativity, just mechanical browser clicks. 5 pins per batch with rate limiting.
+
+**Note:** Uses Hermes browser tools (Browserbase) because Playwright headless doesn't work in WSL2 and Pinterest API trial access was denied. Can be converted to fully free Python if either becomes available.
+
 ## Project Layout
 
 ### GitHub Repo (source of truth)
@@ -53,10 +69,12 @@ Daily trending tech products scraper for the **smartypants9786** Pinterest board
 ├── MIGRATION.md                  Transfer to another computer
 ├── cron_job.json                 Job 1: scraper cron config
 ├── cron_job_pins.json            Job 2: pin generator cron config
+├── cron_job_uploader.json        Job 3: pin uploader cron config
 ├── deploy.sh                     One-command deploy to Hermes
 ├── requirements.txt              Python dependencies
 ├── trending_tech_products.py     Scraper + image fetcher script
-└── pinterest_pin_generator.py    Drive poller + CSV parser script
+├── pinterest_pin_generator.py    Drive poller + pin file creator (100% Python)
+└── pinterest_pin_uploader.py     Pin data collector for uploader
 ```
 
 Remote: https://github.com/Asif1924/pinterest-tech-trends
@@ -67,13 +85,15 @@ Remote: https://github.com/Asif1924/pinterest-tech-trends
 ~/.hermes/
 ├── scripts/
 │   ├── trending_tech_products.py    ← deployed scraper
-│   ├── pinterest_pin_generator.py   ← deployed pin generator
+│   ├── pinterest_pin_generator.py   ← deployed pin generator (100% Python)
+│   ├── pinterest_pin_uploader.py    ← deployed uploader data collector
 │   └── .venv/                       ← isolated Python environment
 ├── cron/
-│   ├── jobs.json                    ← both cron job definitions
+│   ├── jobs.json                    ← all 3 cron job definitions
 │   └── output/
 │       ├── e5acea7d6609/            ← Job 1 run logs
-│       └── acdacc6c6513/            ← Job 2 run logs
+│       ├── acdacc6c6513/            ← Job 2 run logs
+│       └── 17ff714ffd58/            ← Job 3 run logs
 ├── pinterest_pins/                  ← generated pin JSON files
 ├── .env                             ← credentials
 └── config.yaml                      ← gateway config
@@ -93,16 +113,16 @@ PinterestAutomation/
 ### Flow
 
 ```
-Job 1 (0 */6 * * *)                Job 2 (30 */6 * * *)
-────────────────────                ────────────────────
-Script scrapes 6 sources            Script polls Drive for CSV
-Agent curates top 20                Agent creates pin JSON files
-Agent fetches Amazon images         Agent uploads pins to Drive
-CSV → Drive + Email + Telegram      Summary → Telegram
-         │                                    │
-         ▼                                    ▼
-  PinterestAutomation/              PinterestAutomation/Pins/
-  trending_tech_*.csv               pin_YYYYMMDD_NN.json
+Job 1 (0 */6)               Job 2 (30 */6)              Job 3 (0 1,7,13,19)
+AI — ~$0.20/run             Python — $0/run             Mechanical — ~$0.08/run
+──────────────────          ──────────────────          ──────────────────────
+Script scrapes sources      Script polls Drive          Script collects pin data
+Agent curates top 20        Script creates pin JSONs    Agent logs into Pinterest
+Agent fetches images        Script uploads to Drive     Agent uploads each pin
+Agent generates CSV         Script outputs summary      Agent updates pin status
+Agent uploads to Drive                                  
+Agent emails CSV                                        
+Agent sends Telegram                                    
 ```
 
 ## Setup
@@ -114,6 +134,7 @@ CSV → Drive + Email + Telegram      Summary → Telegram
 - Gmail app password (for emailing the CSV)
 - Telegram bot configured in Hermes (for report delivery)
 - Google OAuth credentials with drive.file scope (for Drive uploads)
+- Pinterest account credentials (for pin uploads)
 
 ### Deploy
 
@@ -134,8 +155,11 @@ python3 trending_tech_products.py
 # Trigger Job 1 (scraper + images + CSV)
 hermes cron run e5acea7d6609
 
-# Trigger Job 2 (pin generator)
+# Trigger Job 2 (pin generator — runs instantly, no AI)
 hermes cron run acdacc6c6513
+
+# Trigger Job 3 (pin uploader — browser automation)
+hermes cron run 17ff714ffd58
 ```
 
 ## Making Changes
@@ -148,6 +172,7 @@ hermes cron run acdacc6c6513
 
 - **Job 1:** Every 6 hours (12am, 6am, 12pm, 6pm)
 - **Job 2:** 30 minutes after Job 1 (12:30am, 6:30am, 12:30pm, 6:30pm)
+- **Job 3:** 1 hour after Job 1 (1am, 7am, 1pm, 7pm) — 5 pins per batch
 
 ## Pin JSON Format
 
@@ -157,8 +182,8 @@ Each pin file contains everything needed to post to Pinterest:
 {
   "product_name": "Dyson Handheld Fan",
   "board": "smartypants9786",
-  "title": "Short engaging title (max 100 chars)",
-  "description": "Pin description with hashtags (max 500 chars)",
+  "title": "Dyson Handheld Fan - $200-400",
+  "description": "Stay cool anywhere with Dyson's game-changing handheld fan! #TechGadgets #CoolGadgets",
   "link": "https://www.amazon.com/s?k=Dyson+Handheld+Fan&tag=allitechstore-20",
   "category": "Cool Gadgets and Gizmos",
   "images": [
@@ -166,11 +191,13 @@ Each pin file contains everything needed to post to Pinterest:
     {"url": "https://m.media-amazon.com/images/I/yyyyy._AC_SL1500_.jpg", "size": "large"}
   ],
   "primary_image": "https://m.media-amazon.com/images/I/xxxxx._AC_SL1500_.jpg",
-  "alt_text": "Accessibility description of the product image",
+  "alt_text": "Product image of Dyson Handheld Fan",
   "price_range": "$200-400",
   "status": "pending_upload"
 }
 ```
+
+Status values: `pending_upload` → `uploaded` or `failed`
 
 ## Affiliate Tag
 
@@ -179,10 +206,12 @@ All Amazon links use the `allitechstore-20` associate tag. To change it, update 
 ## Estimated Costs
 
 Using Claude Sonnet 4 on OpenRouter:
-- Job 1 (AI):  ~$0.20/run × 4/day = ~$24/month
-- Job 2 (Python): $0 — free, no AI tokens
-- Job 3 (AI):  ~$0.15/run × 4/day = ~$18/month
-- Total: ~$42/month
+- Job 1 (AI — curates products):          ~$0.20/run × 4/day = ~$24/month
+- Job 2 (Python — free):                   $0/month
+- Job 3 (mechanical browser automation):  ~$0.08/run × 4/day = ~$10/month
+- **Total: ~$34/month**
+
+Future savings: If Pinterest API access is approved or headless browser works on a non-WSL machine, Job 3 becomes free too ($24/month total). If Job 1 curation is converted to Python, everything becomes free ($0/month).
 
 ## License
 
