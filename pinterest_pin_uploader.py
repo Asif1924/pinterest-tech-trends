@@ -100,7 +100,7 @@ def main():
         "telegram_bot_token": env.get("TELEGRAM_BOT_TOKEN", ""),
         "telegram_chat_id": env.get("TELEGRAM_HOME_CHANNEL", ""),
         "google_token_path": os.path.join(HERMES_HOME, "google_token.json"),
-        "drive_pins_folder_id": "1sggNrixmH_jWFTLhspoy3i3YM7GVir7I",
+        "drive_pins_folder_id": "1p4JS0GDHVny1IBDbcSNghgKHaY_64E5D",
         "board_name": "SmartyPants9786",
         "board_url": "https://www.pinterest.com/SmartyPants2786/smartypants9786/",
         "stats": {

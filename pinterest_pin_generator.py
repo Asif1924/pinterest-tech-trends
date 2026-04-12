@@ -36,7 +36,7 @@ HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 TOKEN_PATH = os.path.join(HERMES_HOME, "google_token.json")
 PINS_DIR = os.path.join(HERMES_HOME, "pinterest_pins")
 DRIVE_FOLDER_ID = "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L"  # PinterestAutomation
-PINS_FOLDER_ID = "1sggNrixmH_jWFTLhspoy3i3YM7GVir7I"   # PinterestAutomation/Pins
+PINS_FOLDER_ID = "1p4JS0GDHVny1IBDbcSNghgKHaY_64E5D"   # PinterestAutomation/Pins
 BOARD_NAME = "smartypants9786"
 
 
@@ -212,6 +212,33 @@ def create_pin_json(product, date_str):
     }
 
 
+def ensure_pins_folder(service):
+    """Make sure the Pins folder exists on Drive. Create it if deleted."""
+    global PINS_FOLDER_ID
+    try:
+        # Check if folder exists
+        service.files().get(fileId=PINS_FOLDER_ID, fields="id,trashed").execute()
+        return PINS_FOLDER_ID
+    except Exception:
+        pass
+    # Check if there's a Pins folder under PinterestAutomation
+    results = service.files().list(
+        q=f"'{DRIVE_FOLDER_ID}' in parents and name='Pins' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        fields="files(id)",
+    ).execute()
+    if results.get("files"):
+        PINS_FOLDER_ID = results["files"][0]["id"]
+        return PINS_FOLDER_ID
+    # Create it
+    folder = service.files().create(body={
+        "name": "Pins",
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [DRIVE_FOLDER_ID],
+    }, fields="id").execute()
+    PINS_FOLDER_ID = folder["id"]
+    return PINS_FOLDER_ID
+
+
 def cleanup_old_pins_local():
     """Delete all existing local pin files."""
     os.makedirs(PINS_DIR, exist_ok=True)
@@ -324,7 +351,8 @@ def main():
         print("[SILENT]")
         return
 
-    # Step 4: Clean up old pins (local + Drive) and old CSVs
+    # Step 4: Ensure Pins folder exists, then clean up
+    ensure_pins_folder(service)
     local_deleted = cleanup_old_pins_local()
     drive_pins_deleted = cleanup_old_pins_drive(service)
     old_csvs_deleted = cleanup_old_csvs_drive(service, keep_latest=1)
