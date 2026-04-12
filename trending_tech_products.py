@@ -667,6 +667,27 @@ def main():
                 print(result.stdout.strip())
             if result.returncode != 0 and result.stderr:
                 send_telegram(f"⚠️ Job 2 error: {result.stderr[:200]}", env)
+
+            # Step 9: Trigger Job 3 (pin uploader) immediately
+            # Check if pins were created by looking for "Created:" in output
+            if result.stdout and "Created:" in result.stdout and "Created: 0" not in result.stdout:
+                try:
+                    # Update Job 3's next_run_at to now so the cron ticker picks it up
+                    cron_jobs_path = os.path.join(HERMES_HOME, "cron", "jobs.json")
+                    with open(cron_jobs_path) as f:
+                        cron_data = json.load(f)
+                    for job in cron_data.get("jobs", []):
+                        if job.get("name") == "Pinterest Pin Uploader" and job.get("enabled", False):
+                            job["next_run_at"] = datetime.now(timezone.utc).isoformat()
+                            job["state"] = "scheduled"
+                            break
+                    cron_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    with open(cron_jobs_path, "w") as f:
+                        json.dump(cron_data, f, indent=2)
+                    send_telegram("🚀 Job 3 triggered: Pin uploader will start shortly", env)
+                except Exception as e:
+                    send_telegram(f"⚠️ Could not trigger Job 3: {e}", env)
+
         except Exception as e:
             send_telegram(f"⚠️ Job 2 failed to run: {e}", env)
 
