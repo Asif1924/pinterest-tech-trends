@@ -26,7 +26,7 @@ Daily trending tech products scraper for the **smartypants9786** Pinterest board
 
 7. **Delivers** a formatted report to Telegram
 
-### Job 2: Pinterest Pin Generator (30 min after Job 1)
+### Job 2: Pinterest Pin Generator (30 min after Job 1) — 100% Python, no AI
 
 1. **Polls** Google Drive for the latest CSV
 
@@ -37,6 +37,8 @@ Daily trending tech products scraper for the **smartypants9786** Pinterest board
 4. **Uploads** pin files to Google Drive (PinterestAutomation/Pins folder)
 
 5. **Delivers** a summary to Telegram
+
+**Cost: $0 per run** — entirely Python, no AI tokens used
 
 ## Project Layout
 
@@ -177,10 +179,10 @@ All Amazon links use the `allitechstore-20` associate tag. To change it, update 
 ## Estimated Costs
 
 Using Claude Sonnet 4 on OpenRouter:
-- Job 1: ~$0.15-0.25 per run
-- Job 2: ~$0.10-0.15 per run
-- Daily (4 runs each): ~$1.00-1.60
-- Monthly: ~$30-50
+- Job 1 (AI):  ~$0.20/run × 4/day = ~$24/month
+- Job 2 (Python): $0 — free, no AI tokens
+- Job 3 (AI):  ~$0.15/run × 4/day = ~$18/month
+- Total: ~$42/month
 
 ## License
 

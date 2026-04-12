@@ -43,45 +43,45 @@ JOB 1: Trending Tech Products (every 6 hours)
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-JOB 2: Pinterest Pin Generator (runs 30 min after Job 1)
+JOB 2: Pinterest Pin Generator (runs 30 min after Job 1) — 100% PYTHON, NO AI
 
 9     Script polls Google Drive    No    Pure Python. Downloads latest CSV from      ~/.hermes/scripts/pinterest_pin_generator.py
                                          PinterestAutomation folder via Drive        ~/pinterest-tech-trends/pinterest_pin_generator.py (source)
-                                         API, checks for already-pinned products,
-                                         outputs JSON with product data + images.
+                                         API. Checks for already-pinned products.
 
-10    Agent creates pin files      YES   Reads product data, generates a pin         ~/.hermes/cron/jobs.json (prompt)
-                                         JSON file for each new product with          ~/pinterest-tech-trends/cron_job_pins.json (source)
-                                         title, description, hashtags, affiliate
-                                         link, images array, primary_image,
-                                         and alt text.
+10    Script creates pin files     No    Pure Python. Generates a pin JSON file      ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
+                                         for each new product with title,
+                                         description, hashtags, affiliate link,
+                                         images array, primary_image, alt text.
 
-11    Agent uploads pins to Drive  YES   Uploads each pin JSON to Google Drive       ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json (local)
-                                         PinterestAutomation/Pins folder via         Google Drive: PinterestAutomation/Pins/ (remote)
-                                         execute_code. Same OAuth flow as Job 1.     (same agent turn as step 10)
+11    Script uploads pins to Drive No    Pure Python. Uploads each pin JSON to       Google Drive: PinterestAutomation/Pins/
+                                         PinterestAutomation/Pins folder via
+                                         Drive API. Updates existing files if
+                                         they already exist.
 
-12    Hermes delivers summary      No    Sends pin creation summary to Telegram.     (same delivery mechanism as step 8)
+12    Script outputs summary       No    Prints plain text report to stdout.         (relayed to Telegram by Hermes)
+                                         Agent just passes it through — no
+                                         AI processing needed.
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-JOB 3: Pinterest Pin Uploader (runs 1 hour after Job 2) — PAUSED until Pinterest API approved
+JOB 3: Pinterest Pin Uploader (runs 1 hour after Job 2)
 
-13    Script scans pending pins    No    Pure Python. Scans ~/.hermes/pinterest_pins/  ~/.hermes/scripts/pinterest_pin_uploader.py
-                                         for pin files with status "pending_upload".    ~/pinterest-tech-trends/pinterest_pin_uploader.py (source)
-                                         Checks Pinterest API credentials.
+13    Script scans pending pins    No    Pure Python. Scans ~/.hermes/pinterest_pins/ ~/.hermes/scripts/pinterest_pin_uploader.py
+                                         for pin files with status "pending_upload".  ~/pinterest-tech-trends/pinterest_pin_uploader.py (source)
                                          Outputs JSON with pending pins.
 
-14    Agent uploads to Pinterest   YES   For each pending pin, calls Pinterest          ~/.hermes/.env (PINTEREST_ACCESS_TOKEN)
-                                         v5 API to create a pin on the                  ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
-                                         SmartyPants9786 board. Uses primary_image,     (same agent turn)
-                                         title, description, affiliate link.
-                                         Rate limited: 2s between uploads.
+14    Agent uploads to Pinterest   YES   Browser automation. Logs into Pinterest,    ~/.hermes/.env (PINTEREST_EMAIL, PINTEREST_PASSWORD)
+                                         creates each pin on SmartyPants9786          ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
+                                         board using pin builder. Downloads
+                                         product image, fills title/description/
+                                         alt text/affiliate link. Rate limited.
 
-15    Agent updates pin status     YES   Changes each pin file status from              ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
-                                         "pending_upload" to "uploaded" (or "failed").   (same agent turn as step 14)
-                                         Adds pinterest_pin_id and uploaded_at.
+15    Agent updates pin status     YES   Changes each pin file status from           ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
+                                         "pending_upload" to "uploaded" (or           (same agent turn as step 14)
+                                         "failed"). Adds uploaded_at timestamp.
 
-16    Hermes delivers summary      No    Sends upload summary to Telegram.              (same delivery mechanism as step 8)
+16    Hermes delivers summary      No    Sends upload summary to Telegram.           (same delivery mechanism as step 8)
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -102,15 +102,23 @@ SUMMARY: What uses AI tokens vs what's free
   Step 1:  Web scraping (Python)        Step 2:  Curate top 20 products
   Step 8:  Telegram delivery            Step 3:  Fetch Amazon images
   Step 9:  Google Drive polling         Step 4:  Generate CSV
-  Step 12: Telegram delivery            Step 5:  Upload CSV to Drive
-  Step 13: Scan pending pins            Step 6:  Email CSV
-  Step 16: Telegram delivery            Step 7:  Write Telegram report
-  Deploy script                         Step 10: Create pin JSON files
-  GitHub push/pull                      Step 11: Upload pins to Drive
-  Cron scheduling                       Step 14: Upload pins to Pinterest
-                                        Step 15: Update pin file status
+  Step 10: Create pin files (Python)    Step 5:  Upload CSV to Drive
+  Step 11: Upload pins to Drive         Step 6:  Email CSV
+  Step 12: Summary output               Step 7:  Write Telegram report
+  Step 13: Scan pending pins            Step 14: Upload pins to Pinterest
+  Step 16: Telegram delivery            Step 15: Update pin file status
+  Deploy script
+  GitHub push/pull
+  Cron scheduling
 
   Steps 2-7 are ONE agent turn (~$0.15-0.25 on Sonnet)
-  Steps 10-11 are ONE agent turn (~$0.10-0.15 on Sonnet)
-  Steps 14-15 are ONE agent turn (~$0.10-0.15 on Sonnet)
+  Steps 9-12 are ZERO cost (pure Python)
+  Steps 14-15 are ONE agent turn (~$0.15 on Sonnet)
+
+MONTHLY COST ESTIMATE (4 runs/day):
+  Job 1 (AI):    ~$0.20/run × 4/day × 30 = ~$24/month
+  Job 2 (free):  $0.00
+  Job 3 (AI):    ~$0.15/run × 4/day × 30 = ~$18/month
+  ──────────────────────────────────────────────
+  Total:         ~$42/month
 ```
