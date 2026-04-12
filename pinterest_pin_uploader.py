@@ -74,6 +74,24 @@ def main():
     # Limit batch size
     batch = pending[:MAX_PINS_PER_RUN]
 
+    # Send Telegram notification that Job 3 is starting
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = env.get("TELEGRAM_HOME_CHANNEL", "")
+    if token and chat_id and pending:
+        try:
+            import urllib.request
+            data = json.dumps({
+                "chat_id": chat_id,
+                "text": f"🚀 Job 3 started: Uploading {min(len(pending), MAX_PINS_PER_RUN)} pins to Pinterest ({today})"
+            }).encode()
+            req = urllib.request.Request(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                data=data, headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=10)
+        except Exception:
+            pass
+
     output = {
         "date": today,
         "pins_directory": PINS_DIR,

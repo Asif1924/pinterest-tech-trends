@@ -40,6 +40,35 @@ from datetime import datetime, timezone
 from html.parser import HTMLParser
 
 AFFILIATE_TAG = "allitechstore-20"
+
+# Telegram notification helper
+def _load_env_var(name):
+    try:
+        with open(os.path.expanduser("~/.hermes/.env")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == name:
+                        return v.strip()
+    except FileNotFoundError:
+        pass
+    return ""
+
+def send_telegram(text):
+    token = _load_env_var("TELEGRAM_BOT_TOKEN")
+    chat_id = _load_env_var("TELEGRAM_HOME_CHANNEL")
+    if not token or not chat_id:
+        return
+    try:
+        data = json.dumps({"chat_id": chat_id, "text": text}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data, headers={"Content-Type": "application/json"}
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
 CATEGORIES = [
     "Smart Home and IoT",
     "Phone and Tablet Accessories",
@@ -300,6 +329,8 @@ def deduplicate_products(all_products):
 
 def main():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    send_telegram(f"🔍 Job 1 started: Scraping trending tech products ({today})")
+
     all_products = []
     sources_status = {}
 

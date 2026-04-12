@@ -39,6 +39,40 @@ DRIVE_FOLDER_ID = "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L"  # PinterestAutomation
 PINS_FOLDER_ID = "1sggNrixmH_jWFTLhspoy3i3YM7GVir7I"   # PinterestAutomation/Pins
 BOARD_NAME = "smartypants9786"
 
+
+# Telegram notification helper
+def _load_env_var(name):
+    try:
+        env_path = os.path.join(HERMES_HOME, ".env")
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == name:
+                        return v.strip()
+    except FileNotFoundError:
+        pass
+    return ""
+
+
+def send_telegram(text):
+    import urllib.request as _ur
+    token = _load_env_var("TELEGRAM_BOT_TOKEN")
+    chat_id = _load_env_var("TELEGRAM_HOME_CHANNEL")
+    if not token or not chat_id:
+        return
+    try:
+        data = json.dumps({"chat_id": chat_id, "text": text}).encode()
+        req = _ur.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data, headers={"Content-Type": "application/json"}
+        )
+        _ur.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
 # Hashtag map by category
 HASHTAGS = {
     "Smart Home and IoT": "#SmartHome #IoT #HomeAutomation #TechHome #GadgetGoals",
@@ -264,6 +298,8 @@ def main():
     today = datetime.now(timezone.utc)
     date_str = today.strftime("%Y%m%d")
 
+    send_telegram(f"📌 Job 2 started: Generating Pinterest pins ({today.strftime('%Y-%m-%d')})")
+
     # Step 1: Connect to Drive
     try:
         service = get_drive_service()
@@ -346,6 +382,8 @@ def main():
     print()
     print(f"Local: {PINS_DIR}")
     print(f"Drive: PinterestAutomation/Pins/")
+
+    send_telegram(f"✅ Job 2 complete: {len(created)} pins created, {len(uploaded)} uploaded to Drive")
 
 
 if __name__ == "__main__":
