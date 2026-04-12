@@ -4,13 +4,16 @@ Trending Tech Products — FULLY AUTOMATED (no AI needed)
 
 Complete pipeline in one script:
   1. Scrapes 6 sources for trending tech products
-  2. Curates top 20 by Reddit score + source count
+  2. Curates top 20 by Reddit score + product filtering
   3. Fetches 2 Amazon product images per product
   4. Generates CSV with all data
   5. Uploads CSV to Google Drive
   6. Emails CSV to inbox
   7. Sends formatted Telegram report
+  8. Triggers Job 2 (pin generator) immediately
+  9. Triggers Job 3 (pin uploader)
 
+All settings in pinterest_config.json — no hardcoded values.
 Output: Plain text Telegram report to stdout.
 Cost: $0 per run.
 """
@@ -23,6 +26,7 @@ import json
 import re
 import time
 import smtplib
+import subprocess
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -35,8 +39,7 @@ from email import encoders
 
 # ── Config ──────────────────────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
-AFFILIATE_TAG = "allitechstore-20"
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "pinterest_config.json")
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_config.json")
 
 
 def load_config():
@@ -48,69 +51,17 @@ def load_config():
         return {}
 
 
-# ── Affiliate Link Strategies ───────────────────────────────────────────────
-
-def affiliate_link_strategy_1(product_name, affiliate_tag=AFFILIATE_TAG):
-    """Strategy 1: Search Links.
-    
-    Builds an Amazon search URL. Always works, never breaks.
-    User lands on search results — extra click to reach product.
-    Lower conversion rate but 100% reliable.
-    
-    Example: https://www.amazon.com/s?k=Dyson+Handheld+Fan&tag=allitechstore-20
-    """
-    terms = urllib.parse.quote_plus(product_name)
-    return f"https://www.amazon.com/s?k={terms}&tag={affiliate_tag}"
-
-
-def affiliate_link_strategy_2(product_name, affiliate_tag=AFFILIATE_TAG):
-    """Strategy 2: Direct Product Links.
-    
-    Scrapes the actual ASIN from Amazon search results and builds a
-    direct /dp/ASIN link. User lands directly on product page — higher
-    conversion rate. Falls back to strategy 1 if ASIN can't be found.
-    
-    Example: https://www.amazon.com/dp/B0C1SRTW9F?tag=allitechstore-20
-    """
-    query = urllib.parse.quote_plus(product_name)
-    url = f"https://www.amazon.com/s?k={query}"
-    html = fetch_url(url, timeout=15)
-    if html.startswith("ERROR"):
-        return affiliate_link_strategy_1(product_name, affiliate_tag)
-
-    # Extract ASINs from data-asin attributes
-    asins = re.findall(r'data-asin="([A-Z0-9]{10})"', html)
-    # Dedupe preserving order
-    seen = set()
-    unique = []
-    for a in asins:
-        if a and a not in seen:
-            seen.add(a)
-            unique.append(a)
-
-    if unique:
-        return f"https://www.amazon.com/dp/{unique[0]}?tag={affiliate_tag}"
-
-    # Fallback to strategy 1
-    return affiliate_link_strategy_1(product_name, affiliate_tag)
-
-
-_STRATEGIES = {
-    1: affiliate_link_strategy_1,
-    2: affiliate_link_strategy_2,
-}
-
-
-def make_affiliate_link(product_name, strategy=None, affiliate_tag=AFFILIATE_TAG):
-    """Generate affiliate link using the configured strategy."""
-    if strategy is None:
-        config = load_config()
-        strategy = config.get("link_strategy", 1)
-    fn = _STRATEGIES.get(strategy, affiliate_link_strategy_1)
-    return fn(product_name, affiliate_tag)
-DRIVE_FOLDER_ID = "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L"  # PinterestAutomation
-CSV_PATH = "/tmp/trending_tech_products.csv"
-TOP_N = 20
+CFG = load_config()
+AFFILIATE_TAG = CFG.get("affiliate_tag", "allitechstore-20")
+TOP_N = CFG.get("top_n_products", 20)
+CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
+DRIVE_FOLDER_ID = CFG.get("google_drive", {}).get("automation_folder_id", "")
+TIMEOUT_HTTP = CFG.get("timeouts", {}).get("http_request", 15)
+TIMEOUT_TELEGRAM = CFG.get("timeouts", {}).get("telegram_api", 10)
+TIMEOUT_IMAGE = CFG.get("timeouts", {}).get("image_scrape", 15)
+TIMEOUT_JOB2 = CFG.get("timeouts", {}).get("job2_subprocess", 120)
+SMTP_HOST = CFG.get("smtp_defaults", {}).get("host", "smtp.gmail.com")
+SMTP_PORT = CFG.get("smtp_defaults", {}).get("port", 587)
 
 CATEGORIES = [
     "Smart Home and IoT",
@@ -120,7 +71,6 @@ CATEGORIES = [
     "PC and Gaming Tech",
 ]
 
-# Keywords for auto-categorization
 CATEGORY_KEYWORDS = {
     "Smart Home and IoT": ["smart home", "iot", "robot vacuum", "doorbell", "thermostat",
         "smart light", "led strip", "curtain", "smart plug", "alexa", "matter",
@@ -141,6 +91,17 @@ CATEGORY_KEYWORDS = {
         "dell xps", "macbook", "lenovo", "msi", "benq", "screenbar"],
 }
 
+BRANDS = [
+    "Apple", "Samsung", "Google", "Sony", "Bose", "Anker", "Logitech",
+    "Razer", "JBL", "Meta", "Amazon", "Ring", "Nanoleaf", "Govee",
+    "Dyson", "Ember", "Keychron", "BenQ", "XREAL", "Oura", "Backbone",
+    "SwitchBot", "Dreame", "Roborock", "ecobee", "Philips", "TP-Link",
+    "Eufy", "DJI", "GoPro", "Kindle", "Nintendo", "Valve", "Steam",
+    "Lenovo", "ASUS", "MSI", "Corsair", "SteelSeries", "HyperX",
+    "Nothing", "OnePlus", "Xiaomi", "Shokz", "Garmin", "Fitbit",
+    "Dell", "HP", "LG", "TCL", "Roku", "Sonos", "Marshall",
+]
+
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -150,7 +111,6 @@ USER_AGENT = (
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def load_env():
-    """Read all env vars from ~/.hermes/.env."""
     env = {}
     try:
         with open(os.path.join(HERMES_HOME, ".env")) as f:
@@ -165,7 +125,6 @@ def load_env():
 
 
 def send_telegram(text, env=None):
-    """Send a Telegram message."""
     if env is None:
         env = load_env()
     token = env.get("TELEGRAM_BOT_TOKEN", "")
@@ -178,7 +137,7 @@ def send_telegram(text, env=None):
             f"https://api.telegram.org/bot{token}/sendMessage",
             data=data, headers={"Content-Type": "application/json"}
         )
-        urllib.request.urlopen(req, timeout=10)
+        urllib.request.urlopen(req, timeout=TIMEOUT_TELEGRAM)
     except Exception:
         pass
 
@@ -201,7 +160,9 @@ class TextExtractor(HTMLParser):
         return " ".join(self.text_parts)
 
 
-def fetch_url(url, timeout=15):
+def fetch_url(url, timeout=None):
+    if timeout is None:
+        timeout = TIMEOUT_HTTP
     req = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
         "Accept": "text/html,application/xhtml+xml,application/json",
@@ -223,20 +184,47 @@ def html_to_text(html):
     return parser.get_text()
 
 
+# ── Affiliate Link Strategies ───────────────────────────────────────────────
+
+def affiliate_link_strategy_1(product_name, affiliate_tag=None):
+    """Strategy 1: Search Links — always works, lower conversion."""
+    tag = affiliate_tag or AFFILIATE_TAG
+    terms = urllib.parse.quote_plus(product_name)
+    return f"https://www.amazon.com/s?k={terms}&tag={tag}"
+
+
+def affiliate_link_strategy_2(product_name, affiliate_tag=None):
+    """Strategy 2: Direct Product Links — higher conversion, scrapes ASIN."""
+    tag = affiliate_tag or AFFILIATE_TAG
+    query = urllib.parse.quote_plus(product_name)
+    url = f"https://www.amazon.com/s?k={query}"
+    html = fetch_url(url, timeout=TIMEOUT_IMAGE)
+    if html.startswith("ERROR"):
+        return affiliate_link_strategy_1(product_name, tag)
+
+    asins = re.findall(r'data-asin="([A-Z0-9]{10})"', html)
+    seen = set()
+    unique = []
+    for a in asins:
+        if a and a not in seen:
+            seen.add(a)
+            unique.append(a)
+
+    if unique:
+        return f"https://www.amazon.com/dp/{unique[0]}?tag={tag}"
+    return affiliate_link_strategy_1(product_name, tag)
+
+
+_STRATEGIES = {1: affiliate_link_strategy_1, 2: affiliate_link_strategy_2}
+
+
+def make_affiliate_link(product_name):
+    strategy = CFG.get("link_strategy", 1)
+    fn = _STRATEGIES.get(strategy, affiliate_link_strategy_1)
+    return fn(product_name)
+
 
 # ── Scrapers ────────────────────────────────────────────────────────────────
-
-BRANDS = [
-    "Apple", "Samsung", "Google", "Sony", "Bose", "Anker", "Logitech",
-    "Razer", "JBL", "Meta", "Amazon", "Ring", "Nanoleaf", "Govee",
-    "Dyson", "Ember", "Keychron", "BenQ", "XREAL", "Oura", "Backbone",
-    "SwitchBot", "Dreame", "Roborock", "ecobee", "Philips", "TP-Link",
-    "Eufy", "DJI", "GoPro", "Kindle", "Nintendo", "Valve", "Steam",
-    "Lenovo", "ASUS", "MSI", "Corsair", "SteelSeries", "HyperX",
-    "Nothing", "OnePlus", "Xiaomi", "Shokz", "Garmin", "Fitbit",
-    "Dell", "HP", "LG", "TCL", "Roku", "Sonos", "Marshall",
-]
-
 
 def extract_products_from_text(text, source_name):
     products = []
@@ -271,10 +259,8 @@ def scrape_reddit_gadgets():
                 score = post.get("score", 0)
                 if score > 50 and len(title) > 15:
                     products.append({
-                        "raw_text": title,
-                        "source": f"reddit/r/{sub}",
-                        "score": score,
-                        "url": post.get("url", ""),
+                        "raw_text": title, "source": f"reddit/r/{sub}",
+                        "score": score, "url": post.get("url", ""),
                     })
         except (json.JSONDecodeError, KeyError):
             continue
@@ -284,60 +270,43 @@ def scrape_reddit_gadgets():
 
 def scrape_amazon_trending():
     products = []
-    urls = [
+    for url in [
         "https://www.amazon.com/gp/moversandshakers/electronics/",
         "https://www.amazon.com/Best-Sellers-Electronics/zgbs/electronics/",
-    ]
-    for url in urls:
+    ]:
         html = fetch_url(url)
-        if html.startswith("ERROR"):
-            continue
-        text = html_to_text(html)
-        products.extend(extract_products_from_text(text, "amazon"))
+        if not html.startswith("ERROR"):
+            products.extend(extract_products_from_text(html_to_text(html), "amazon"))
         time.sleep(1)
     return products
 
 
 def scrape_google_trending_tech():
-    queries = [
-        "trending tech products this week 2026",
-        "best selling gadgets Amazon electronics 2026",
-    ]
     products = []
-    for query in queries:
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://www.google.com/search?q={encoded}&num=15"
-        html = fetch_url(url)
-        if html.startswith("ERROR"):
-            continue
-        text = html_to_text(html)
-        products.extend(extract_products_from_text(text, f"google:{query[:30]}"))
+    for query in ["trending tech products this week 2026", "best selling gadgets Amazon electronics 2026"]:
+        html = fetch_url(f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}&num=15")
+        if not html.startswith("ERROR"):
+            products.extend(extract_products_from_text(html_to_text(html), f"google:{query[:30]}"))
         time.sleep(2)
     return products
 
 
 def scrape_techradar():
     html = fetch_url("https://www.techradar.com/best/best-gadgets")
-    if html.startswith("ERROR"):
-        return []
-    return extract_products_from_text(html_to_text(html), "techradar")
+    return [] if html.startswith("ERROR") else extract_products_from_text(html_to_text(html), "techradar")
 
 
 def scrape_verge():
     html = fetch_url("https://www.theverge.com/tech")
-    if html.startswith("ERROR"):
-        return []
-    return extract_products_from_text(html_to_text(html), "theverge")
+    return [] if html.startswith("ERROR") else extract_products_from_text(html_to_text(html), "theverge")
 
 
 def scrape_producthunt():
     html = fetch_url("https://www.producthunt.com/feed")
-    if html.startswith("ERROR"):
-        return []
-    return extract_products_from_text(html_to_text(html), "producthunt")
+    return [] if html.startswith("ERROR") else extract_products_from_text(html_to_text(html), "producthunt")
 
 
-# ── Curation (Python, no AI) ───────────────────────────────────────────────
+# ── Curation ────────────────────────────────────────────────────────────────
 
 def deduplicate_products(all_products):
     seen = set()
@@ -351,175 +320,130 @@ def deduplicate_products(all_products):
 
 
 def auto_categorize(text):
-    """Assign a category based on keyword matching."""
     text_lower = text.lower()
-    scores = {}
-    for cat, keywords in CATEGORY_KEYWORDS.items():
-        scores[cat] = sum(1 for kw in keywords if kw in text_lower)
+    scores = {cat: sum(1 for kw in kws if kw in text_lower) for cat, kws in CATEGORY_KEYWORDS.items()}
     best = max(scores, key=scores.get)
     return best if scores[best] > 0 else "Cool Gadgets and Gizmos"
 
 
 def is_product_mention(text):
-    """Check if text mentions an actual product (not just news)."""
     text_lower = text.lower()
-    # Must contain a known brand
     has_brand = any(b.lower() in text_lower for b in BRANDS)
-    # Filter out non-product news
-    news_indicators = [
-        "reportedly", "confirms", "demands", "lawsuit", "hacked", "hack",
+    news_words = ["reportedly", "confirms", "demands", "lawsuit", "hacked", "hack",
         "ceo says", "scientists", "study", "research", "bacteria", "drug",
         "political", "government", "court", "police", "killed", "war",
         "election", "president", "senator", "congress", "fbi", "cia",
-        "eradicate", "tumor", "cancer", "disease", "ransom", "arrest",
-    ]
-    is_news = any(ind in text_lower for ind in news_indicators)
-    # Product indicators
-    product_indicators = [
-        "review", "launch", "announced", "release", "price", "buy",
-        "sale", "deal", "hands-on", "specs", "battery", "display",
-        "camera", "design", "upgrade", "gen ", "version", "model",
-        "pro", "ultra", "max", "mini", "plus", "lite", "$",
-    ]
-    has_product_hint = any(ind in text_lower for ind in product_indicators)
-    return (has_brand or has_product_hint) and not is_news
+        "eradicate", "tumor", "cancer", "disease", "ransom", "arrest"]
+    is_news = any(w in text_lower for w in news_words)
+    product_words = ["review", "launch", "announced", "release", "price", "buy",
+        "sale", "deal", "hands-on", "specs", "battery", "display", "camera",
+        "design", "upgrade", "gen ", "version", "model", "pro", "ultra",
+        "max", "mini", "plus", "lite", "$"]
+    has_product = any(w in text_lower for w in product_words)
+    return (has_brand or has_product) and not is_news
 
 
-def curate_top_products(all_products, top_n=TOP_N):
-    """Rank and select top N products. No AI — uses score + product filtering."""
-    # Filter for actual products first
+HASHTAGS = {
+    "Smart Home and IoT": "#SmartHome #IoT #HomeAutomation",
+    "Phone and Tablet Accessories": "#PhoneTech #Smartphone #MobileGadgets",
+    "Audio and Wearables": "#AudioTech #Wearables #TechStyle",
+    "Cool Gadgets and Gizmos": "#CoolGadgets #TechGadgets #Innovation",
+    "PC and Gaming Tech": "#GamingTech #PCGaming #TechDeals",
+}
+
+
+def curate_top_products(all_products):
     product_posts = [p for p in all_products if is_product_mention(p["raw_text"])]
-    
-    # Sort by Reddit score (highest first)
     sorted_products = sorted(product_posts, key=lambda p: p.get("score", 0), reverse=True)
 
     selected = []
     seen_names = set()
 
     for p in sorted_products:
-        if len(selected) >= top_n:
+        if len(selected) >= TOP_N:
             break
-
         raw = p["raw_text"]
-        # Extract a clean product name — look for brand + product pattern
         name = raw[:80]
-        # Try to get a cleaner name by splitting on common separators
         for sep in [" review", " — ", " - ", " | ", ": "]:
             if sep in name.lower():
                 name = name[:name.lower().index(sep)]
                 break
         name = name.strip()[:60]
-
         if not name or len(name) < 5 or name.lower() in seen_names:
             continue
         seen_names.add(name.lower())
 
-        # Build the curated product
         category = auto_categorize(raw)
-        description = raw[:150]
         score = p.get("score", 0)
         why = f"Trending on {p['source']}"
         if score > 0:
             why += f" ({score:,} upvotes)"
-
-        # Category-specific hashtags
-        HASHTAGS = {
-            "Smart Home and IoT": "#SmartHome #IoT #HomeAutomation",
-            "Phone and Tablet Accessories": "#PhoneTech #Smartphone #MobileGadgets",
-            "Audio and Wearables": "#AudioTech #Wearables #TechStyle",
-            "Cool Gadgets and Gizmos": "#CoolGadgets #TechGadgets #Innovation",
-            "PC and Gaming Tech": "#GamingTech #PCGaming #TechDeals",
-        }
         tags = HASHTAGS.get(category, "#TechGadgets #Trending")
 
         selected.append({
-            "number": str(len(selected) + 1),
-            "name": name,
-            "category": category,
-            "description": description,
-            "why_trending": why,
-            "price_range": "",
+            "number": str(len(selected) + 1), "name": name,
+            "category": category, "description": raw[:150],
+            "why_trending": why, "price_range": "",
             "amazon_link": make_affiliate_link(name),
-            "pin_caption": f"{name} — {description[:80]} {tags}",
-            "image_1": "",
-            "image_2": "",
+            "pin_caption": f"{name} — {raw[:80]} {tags}",
+            "image_1": "", "image_2": "",
         })
-
     return selected
 
 
 # ── Image Scraping ──────────────────────────────────────────────────────────
 
 def scrape_amazon_product_images(product_name, num_images=2):
-    """Scrape product images from Amazon search results."""
     query = urllib.parse.quote_plus(product_name)
-    url = f"https://www.amazon.com/s?k={query}"
-    html = fetch_url(url, timeout=15)
+    html = fetch_url(f"https://www.amazon.com/s?k={query}", timeout=TIMEOUT_IMAGE)
     if html.startswith("ERROR"):
         return []
-
     bases = re.findall(
-        r'(https://m\.media-amazon\.com/images/I/[A-Za-z0-9+%-]+)\._[^.]+_\.(?:jpg|png)',
-        html,
-    )
+        r'(https://m\.media-amazon\.com/images/I/[A-Za-z0-9+%-]+)\._[^.]+_\.(?:jpg|png)', html)
     unique_bases = list(dict.fromkeys(bases))
-
     images = []
     for base in unique_bases:
         if len(images) >= num_images:
             break
-        img_id = base.split("/I/")[-1]
-        if len(img_id) < 8:
+        if len(base.split("/I/")[-1]) < 8:
             continue
-        images.append({
-            "large": f"{base}._AC_SL1500_.jpg",
-            "medium": f"{base}._AC_SL1000_.jpg",
-        })
+        images.append({"large": f"{base}._AC_SL1500_.jpg", "medium": f"{base}._AC_SL1000_.jpg"})
     return images
 
 
 def fetch_images_for_products(products):
-    """Fetch Amazon images for each product."""
     for p in products:
         images = scrape_amazon_product_images(p["name"], num_images=2)
         if len(images) >= 1:
             p["image_1"] = images[0]["large"]
         if len(images) >= 2:
             p["image_2"] = images[1]["large"]
-        time.sleep(1)  # rate limit
+        time.sleep(1)
     return products
 
 
 # ── CSV Generation ──────────────────────────────────────────────────────────
 
-def generate_csv(products, path=CSV_PATH):
-    """Write products to CSV file."""
+def generate_csv(products):
     fields = ["Number", "Product Name", "Category", "Description", "Why Trending",
               "Price Range", "Amazon Link", "Pin Caption Idea", "Image 1", "Image 2"]
-
-    with open(path, "w", newline="") as f:
+    with open(CSV_PATH, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for p in products:
             writer.writerow({
-                "Number": p["number"],
-                "Product Name": p["name"],
-                "Category": p["category"],
-                "Description": p["description"],
-                "Why Trending": p["why_trending"],
-                "Price Range": p["price_range"],
-                "Amazon Link": p["amazon_link"],
-                "Pin Caption Idea": p["pin_caption"],
-                "Image 1": p["image_1"],
-                "Image 2": p["image_2"],
+                "Number": p["number"], "Product Name": p["name"],
+                "Category": p["category"], "Description": p["description"],
+                "Why Trending": p["why_trending"], "Price Range": p["price_range"],
+                "Amazon Link": p["amazon_link"], "Pin Caption Idea": p["pin_caption"],
+                "Image 1": p["image_1"], "Image 2": p["image_2"],
             })
-    return path
+    return CSV_PATH
 
 
 # ── Google Drive Upload ─────────────────────────────────────────────────────
 
 def upload_csv_to_drive(csv_path, env):
-    """Upload CSV to Google Drive PinterestAutomation folder."""
     try:
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
@@ -551,8 +475,7 @@ def upload_csv_to_drive(csv_path, env):
     # Delete old CSVs before uploading new one
     old_csvs = service.files().list(
         q=f"'{DRIVE_FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
-        fields="files(id, name)",
-        pageSize=50,
+        fields="files(id, name)", pageSize=50,
     ).execute().get("files", [])
     for f in old_csvs:
         service.files().delete(fileId=f["id"]).execute()
@@ -560,8 +483,7 @@ def upload_csv_to_drive(csv_path, env):
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     file_metadata = {
         "name": f"trending_tech_products_{today}.csv",
-        "parents": [DRIVE_FOLDER_ID],
-        "mimeType": "text/csv",
+        "parents": [DRIVE_FOLDER_ID], "mimeType": "text/csv",
     }
     media = MediaFileUpload(csv_path, mimetype="text/csv")
     file = service.files().create(
@@ -573,17 +495,15 @@ def upload_csv_to_drive(csv_path, env):
 # ── Email ───────────────────────────────────────────────────────────────────
 
 def email_csv(csv_path, products, drive_link, env):
-    """Email the CSV as attachment."""
     email_addr = env.get("EMAIL_ADDRESS", "")
     email_pass = env.get("EMAIL_PASSWORD", "")
-    smtp_host = env.get("EMAIL_SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(env.get("EMAIL_SMTP_PORT", "587"))
+    smtp_host = env.get("EMAIL_SMTP_HOST", SMTP_HOST)
+    smtp_port = int(env.get("EMAIL_SMTP_PORT", str(SMTP_PORT)))
 
     if not email_addr or not email_pass:
         return "Email credentials not configured"
 
     today = datetime.now(timezone.utc).strftime("%B %d, %Y")
-    
     msg = MIMEMultipart()
     msg["From"] = email_addr
     msg["To"] = email_addr
@@ -599,7 +519,6 @@ def email_csv(csv_path, products, drive_link, env):
     body += f"\n... and {len(products) - 5} more. See attached CSV for full list."
 
     msg.attach(MIMEText(body, "plain"))
-
     with open(csv_path, "rb") as f:
         part = MIMEBase("application", "octet-stream")
         part.set_payload(f.read())
@@ -622,33 +541,20 @@ def email_csv(csv_path, products, drive_link, env):
 # ── Telegram Report ─────────────────────────────────────────────────────────
 
 def format_telegram_report(products, today_str):
-    """Format the plain text Telegram report."""
-    lines = []
-    lines.append(f"DAILY TRENDING TECH PRODUCTS FOR PINTEREST")
-    lines.append(f"{today_str}")
-    lines.append("")
-
-    # Group by category
+    lines = [f"DAILY TRENDING TECH PRODUCTS FOR PINTEREST", today_str, ""]
     by_cat = {}
     for p in products:
-        cat = p["category"]
-        if cat not in by_cat:
-            by_cat[cat] = []
-        by_cat[cat].append(p)
-
+        by_cat.setdefault(p["category"], []).append(p)
     for cat in CATEGORIES:
         if cat not in by_cat:
             continue
-        lines.append(f"--- {cat.upper()} ---")
-        lines.append("")
+        lines.extend([f"--- {cat.upper()} ---", ""])
         for p in by_cat[cat]:
             lines.append(f"{p['number']}. {p['name']}")
-            lines.append(f"{p['description'][:120]}")
+            lines.append(p['description'][:120])
             if p['price_range']:
                 lines.append(f"Price: {p['price_range']}")
-            lines.append(f"{p['amazon_link']}")
-            lines.append("")
-
+            lines.extend([p['amazon_link'], ""])
     return "\n".join(lines)
 
 
@@ -659,35 +565,25 @@ def main():
     today_str = today.strftime("%B %d, %Y")
     env = load_env()
 
-    config = load_config()
-    strategy = config.get("link_strategy", 1)
-    strategy_name = config.get("link_strategies", {}).get(str(strategy), {}).get("name", f"Strategy {strategy}")
+    strategy = CFG.get("link_strategy", 1)
+    strategy_name = CFG.get("link_strategies", {}).get(str(strategy), {}).get("name", f"Strategy {strategy}")
     send_telegram(f"🔍 Job 1 started: Scraping trending tech products ({today.strftime('%Y-%m-%d')})\nAffiliate links: {strategy_name}", env)
 
     # Step 1: Scrape all sources
     all_products = []
-    sources_status = {}
-
-    collectors = [
-        ("reddit", scrape_reddit_gadgets),
-        ("amazon", scrape_amazon_trending),
-        ("google", scrape_google_trending_tech),
-        ("techradar", scrape_techradar),
-        ("theverge", scrape_verge),
-        ("producthunt", scrape_producthunt),
-    ]
-
-    for name, fn in collectors:
+    for name, fn in [
+        ("reddit", scrape_reddit_gadgets), ("amazon", scrape_amazon_trending),
+        ("google", scrape_google_trending_tech), ("techradar", scrape_techradar),
+        ("theverge", scrape_verge), ("producthunt", scrape_producthunt),
+    ]:
         try:
-            results = fn()
-            all_products.extend(results)
-            sources_status[name] = len(results)
-        except Exception as e:
-            sources_status[name] = 0
+            all_products.extend(fn())
+        except Exception:
+            pass
 
-    # Step 2: Deduplicate and curate top 20
+    # Step 2: Curate top N
     unique = deduplicate_products(all_products)
-    products = curate_top_products(unique, TOP_N)
+    products = curate_top_products(unique)
 
     if not products:
         send_telegram("⚠️ Job 1: No products found from any source", env)
@@ -713,24 +609,22 @@ def main():
     if email_err:
         send_telegram(f"⚠️ Email failed: {email_err}", env)
 
-    # Step 7: Format and output Telegram report
+    # Step 7: Summary
     report = format_telegram_report(products, today_str)
-
     summary = f"✅ Job 1 complete: {len(products)} products, {img_count} with images"
     if drive_link:
-        summary += f", CSV on Drive"
+        summary += ", CSV on Drive"
     if not email_err:
-        summary += f", emailed"
+        summary += ", emailed"
     send_telegram(summary, env)
 
     # Step 8: Run Job 2 (pin generator) immediately
     if drive_link:
         try:
-            import subprocess
-            pin_gen_script = os.path.join(os.path.dirname(__file__), "pinterest_pin_generator.py")
+            pin_gen_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_pin_generator.py")
             result = subprocess.run(
                 [sys.executable, pin_gen_script],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, text=True, timeout=TIMEOUT_JOB2,
             )
             if result.stdout.strip() and result.stdout.strip() != "[SILENT]":
                 print()
@@ -739,11 +633,9 @@ def main():
             if result.returncode != 0 and result.stderr:
                 send_telegram(f"⚠️ Job 2 error: {result.stderr[:200]}", env)
 
-            # Step 9: Trigger Job 3 (pin uploader) immediately
-            # Check if pins were created by looking for "Created:" in output
+            # Step 9: Trigger Job 3 (pin uploader)
             if result.stdout and "Created:" in result.stdout and "Created: 0" not in result.stdout:
                 try:
-                    # Update Job 3's next_run_at to now so the cron ticker picks it up
                     cron_jobs_path = os.path.join(HERMES_HOME, "cron", "jobs.json")
                     with open(cron_jobs_path) as f:
                         cron_data = json.load(f)
@@ -758,11 +650,10 @@ def main():
                     send_telegram("🚀 Job 3 triggered: Pin uploader will start shortly", env)
                 except Exception as e:
                     send_telegram(f"⚠️ Could not trigger Job 3: {e}", env)
-
         except Exception as e:
             send_telegram(f"⚠️ Job 2 failed to run: {e}", env)
 
-    # Output report (delivered to Telegram by Hermes)
+    # Output report
     print(report)
 
 

@@ -13,8 +13,26 @@
       "example": "https://www.amazon.com/dp/B0C1SRTW9F?tag=allitechstore-20"
     }
   },
-  "pinterest_board": "SmartyPants9786",
-  "email_to": "alli.asif@gmail.com",
   "top_n_products": 20,
-  "max_pins_per_upload_batch": 5
+  "max_pins_per_upload_batch": 5,
+  "pinterest": {
+    "board_name": "SmartyPants9786",
+    "username": "SmartyPants2786",
+    "board_url": "https://www.pinterest.com/SmartyPants2786/smartypants9786/"
+  },
+  "google_drive": {
+    "automation_folder_id": "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L",
+    "pins_folder_id": "1p4JS0GDHVny1IBDbcSNghgKHaY_64E5D"
+  },
+  "csv_path": "/tmp/trending_tech_products.csv",
+  "timeouts": {
+    "http_request": 15,
+    "telegram_api": 10,
+    "image_scrape": 15,
+    "job2_subprocess": 120
+  },
+  "smtp_defaults": {
+    "host": "smtp.gmail.com",
+    "port": 587
+  }
 }
