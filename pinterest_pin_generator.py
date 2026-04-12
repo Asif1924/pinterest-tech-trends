@@ -178,6 +178,55 @@ def create_pin_json(product, date_str):
     }
 
 
+def cleanup_old_pins_local():
+    """Delete all existing local pin files."""
+    os.makedirs(PINS_DIR, exist_ok=True)
+    count = 0
+    for f in Path(PINS_DIR).glob("pin_*.json"):
+        f.unlink()
+        count += 1
+    return count
+
+
+def cleanup_old_pins_drive(service):
+    """Delete all existing pin files from Drive Pins folder."""
+    count = 0
+    page_token = None
+    while True:
+        results = service.files().list(
+            q=f"'{PINS_FOLDER_ID}' in parents and trashed=false",
+            fields="nextPageToken, files(id, name)",
+            pageSize=100,
+            pageToken=page_token,
+        ).execute()
+
+        for f in results.get("files", []):
+            service.files().delete(fileId=f["id"]).execute()
+            count += 1
+
+        page_token = results.get("nextPageToken")
+        if not page_token:
+            break
+    return count
+
+
+def cleanup_old_csvs_drive(service, keep_latest=1):
+    """Delete old CSV files from PinterestAutomation folder, keeping the latest N."""
+    results = service.files().list(
+        q=f"'{DRIVE_FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
+        orderBy="createdTime desc",
+        fields="files(id, name, createdTime)",
+        pageSize=50,
+    ).execute()
+
+    files = results.get("files", [])
+    deleted = 0
+    for f in files[keep_latest:]:
+        service.files().delete(fileId=f["id"]).execute()
+        deleted += 1
+    return deleted
+
+
 def upload_pin_to_drive(service, pin_path, pin_filename):
     """Upload a pin JSON file to the Drive Pins folder."""
     file_metadata = {
@@ -239,13 +288,13 @@ def main():
         print("[SILENT]")
         return
 
-    # Step 4: Check for already-pinned products
-    existing = get_existing_pin_names()
-    new_products = [p for p in products if p["name"] not in existing]
+    # Step 4: Clean up old pins (local + Drive) and old CSVs
+    local_deleted = cleanup_old_pins_local()
+    drive_pins_deleted = cleanup_old_pins_drive(service)
+    old_csvs_deleted = cleanup_old_csvs_drive(service, keep_latest=1)
 
-    if not new_products:
-        print("[SILENT]")
-        return
+    # All products are new since we just cleaned up
+    new_products = products
 
     # Step 5: Create pin files and upload to Drive
     created = []
@@ -275,9 +324,13 @@ def main():
     print(f"Pinterest Pin Generator Report - {today.strftime('%B %d, %Y')}")
     print(f"Source CSV: {file_info['name']}")
     print()
+    print(f"Cleanup:")
+    print(f"  Old local pins deleted: {local_deleted}")
+    print(f"  Old Drive pins deleted: {drive_pins_deleted}")
+    print(f"  Old CSVs deleted: {old_csvs_deleted}")
+    print()
     print(f"Created: {len(created)} pin files")
     print(f"Uploaded to Drive: {len(uploaded)} files")
-    print(f"Skipped (already pinned): {len(existing)} products")
     if errors:
         print(f"Errors: {len(errors)}")
         for name, err in errors:
