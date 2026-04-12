@@ -4,7 +4,7 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 
 ## What It Does
 
-### Job 1: Trending Tech Products (every 6 hours) — AI
+### Job 1: Trending Tech Products (every 6 hours) — 100% Python, no AI
 
 1. **Scrapes** trending tech products from 6 sources:
    - Reddit (r/gadgets, r/technology, r/tech)
@@ -14,7 +14,7 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
    - The Verge
    - Product Hunt
 
-2. **Curates** the top 20 most pin-worthy products using AI
+2. **Curates** the top 20 by Reddit score + product filtering (no AI)
 
 3. **Fetches 2 product images** per product from Amazon (1500px high-res)
 
@@ -25,6 +25,8 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 6. **Emails** the CSV to your inbox
 
 7. **Delivers** a formatted report to Telegram
+
+**Cost: $0 per run** — entirely Python, no AI tokens used
 
 ### Job 2: Pinterest Pin Generator (30 min after Job 1) — 100% Python, no AI
 
@@ -205,13 +207,15 @@ All Amazon links use the `allitechstore-20` associate tag. To change it, update 
 
 ## Estimated Costs
 
-Using Claude Sonnet 4 on OpenRouter:
-- Job 1 (AI — curates products):          ~$0.20/run × 4/day = ~$24/month
-- Job 2 (Python — free):                   $0/month
-- Job 3 (mechanical browser automation):  ~$0.08/run × 4/day = ~$10/month
-- **Total: ~$34/month**
+- Job 1 (Python): $0 — free, no AI tokens
+- Job 2 (Python): $0 — free, no AI tokens
+- Job 3 (mechanical browser): ~$0.08/run × 4/day = ~$10/month
+- **Total: ~$10/month**
 
-Future savings: If Pinterest API access is approved or headless browser works on a non-WSL machine, Job 3 becomes free too ($24/month total). If Job 1 curation is converted to Python, everything becomes free ($0/month).
+If Pinterest API access is approved or headless browser works on non-WSL,
+Job 3 becomes free too → **$0/month**.
+
+
 
 ## License
 
