@@ -79,6 +79,8 @@ def main():
         "pins_directory": PINS_DIR,
         "pinterest_email": env.get("PINTEREST_EMAIL", ""),
         "pinterest_password": env.get("PINTEREST_PASSWORD", ""),
+        "telegram_bot_token": env.get("TELEGRAM_BOT_TOKEN", ""),
+        "telegram_chat_id": env.get("TELEGRAM_HOME_CHANNEL", ""),
         "board_name": "SmartyPants9786",
         "board_url": "https://www.pinterest.com/SmartyPants2786/smartypants9786/",
         "stats": {
