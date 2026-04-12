@@ -480,6 +480,15 @@ def upload_csv_to_drive(csv_path, env):
 
     service = build("drive", "v3", credentials=creds)
 
+    # Delete old CSVs before uploading new one
+    old_csvs = service.files().list(
+        q=f"'{DRIVE_FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
+        fields="files(id, name)",
+        pageSize=50,
+    ).execute().get("files", [])
+    for f in old_csvs:
+        service.files().delete(fileId=f["id"]).execute()
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     file_metadata = {
         "name": f"trending_tech_products_{today}.csv",
