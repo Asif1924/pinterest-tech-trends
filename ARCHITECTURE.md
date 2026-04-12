@@ -37,4 +37,23 @@ Supporting files:
 
       GitHub repo                  No    Source of truth for all editable files.     ~/pinterest-tech-trends/
                                                                                      github.com/Asif1924/pinterest-tech-trends
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+JOB 2: Pinterest Pin Generator (runs 30 min after Job 1)
+
+7     Script polls Google Drive    No    Pure Python. Downloads latest CSV from      ~/.hermes/scripts/pinterest_pin_generator.py
+                                         PinterestAutomation folder, checks for      ~/pinterest-tech-trends/pinterest_pin_generator.py (source)
+                                         already-pinned products, outputs JSON.
+
+8     Agent creates pin files      YES   Reads product data, generates a pin         ~/.hermes/cron/jobs.json (prompt)
+                                         JSON file for each new product with          ~/pinterest-tech-trends/cron_job_pins.json (source)
+                                         title, description, hashtags, affiliate
+                                         link, image search query, and alt text.
+
+9     Pin files saved to disk      YES   Writes individual JSON files, one per       ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
+                                         product. Status: "pending_upload" for        (same agent turn as step 8)
+                                         a future upload job to consume.
+
+10    Hermes delivers summary      No    Sends pin creation summary to Telegram.     (same delivery as Job 1)
 ```

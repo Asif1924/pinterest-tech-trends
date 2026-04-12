@@ -39,6 +39,10 @@ if [[ ! -f "$SCRIPT_DIR/trending_tech_products.py" ]]; then
     exit 1
 fi
 
+if [[ ! -f "$SCRIPT_DIR/pinterest_pin_generator.py" ]]; then
+    echo "WARNING: pinterest_pin_generator.py not found in $SCRIPT_DIR"
+fi
+
 # --- Step 1: Deploy the scraper script ---
 echo "1. Deploying scraper script..."
 mkdir -p "$HERMES_SCRIPTS"
@@ -52,6 +56,10 @@ if [[ "$DRY_RUN" == true ]]; then
 else
     cp "$SCRIPT_DIR/trending_tech_products.py" "$HERMES_SCRIPTS/trending_tech_products.py"
     echo "   ✓ Copied to $HERMES_SCRIPTS/trending_tech_products.py"
+    if [[ -f "$SCRIPT_DIR/pinterest_pin_generator.py" ]]; then
+        cp "$SCRIPT_DIR/pinterest_pin_generator.py" "$HERMES_SCRIPTS/pinterest_pin_generator.py"
+        echo "   ✓ Copied to $HERMES_SCRIPTS/pinterest_pin_generator.py"
+    fi
 fi
 
 # --- Step 2: Create / update the venv ---
