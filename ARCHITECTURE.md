@@ -64,6 +64,27 @@ JOB 2: Pinterest Pin Generator (runs 30 min after Job 1)
 
 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+JOB 3: Pinterest Pin Uploader (runs 1 hour after Job 2) — PAUSED until Pinterest API approved
+
+13    Script scans pending pins    No    Pure Python. Scans ~/.hermes/pinterest_pins/  ~/.hermes/scripts/pinterest_pin_uploader.py
+                                         for pin files with status "pending_upload".    ~/pinterest-tech-trends/pinterest_pin_uploader.py (source)
+                                         Checks Pinterest API credentials.
+                                         Outputs JSON with pending pins.
+
+14    Agent uploads to Pinterest   YES   For each pending pin, calls Pinterest          ~/.hermes/.env (PINTEREST_ACCESS_TOKEN)
+                                         v5 API to create a pin on the                  ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
+                                         SmartyPants9786 board. Uses primary_image,     (same agent turn)
+                                         title, description, affiliate link.
+                                         Rate limited: 2s between uploads.
+
+15    Agent updates pin status     YES   Changes each pin file status from              ~/.hermes/pinterest_pins/pin_YYYYMMDD_NN.json
+                                         "pending_upload" to "uploaded" (or "failed").   (same agent turn as step 14)
+                                         Adds pinterest_pin_id and uploaded_at.
+
+16    Hermes delivers summary      No    Sends upload summary to Telegram.              (same delivery mechanism as step 8)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
 SUPPORTING FILES
 
       Deploy script                No    Copies scripts, creates venv, updates       ~/pinterest-tech-trends/deploy.sh
@@ -82,11 +103,14 @@ SUMMARY: What uses AI tokens vs what's free
   Step 8:  Telegram delivery            Step 3:  Fetch Amazon images
   Step 9:  Google Drive polling         Step 4:  Generate CSV
   Step 12: Telegram delivery            Step 5:  Upload CSV to Drive
-  Deploy script                         Step 6:  Email CSV
-  GitHub push/pull                      Step 7:  Write Telegram report
-  Cron scheduling                       Step 10: Create pin JSON files
-                                        Step 11: Upload pins to Drive
+  Step 13: Scan pending pins            Step 6:  Email CSV
+  Step 16: Telegram delivery            Step 7:  Write Telegram report
+  Deploy script                         Step 10: Create pin JSON files
+  GitHub push/pull                      Step 11: Upload pins to Drive
+  Cron scheduling                       Step 14: Upload pins to Pinterest
+                                        Step 15: Update pin file status
 
   Steps 2-7 are ONE agent turn (~$0.15-0.25 on Sonnet)
   Steps 10-11 are ONE agent turn (~$0.10-0.15 on Sonnet)
+  Steps 14-15 are ONE agent turn (~$0.10-0.15 on Sonnet)
 ```

@@ -60,6 +60,10 @@ else
         cp "$SCRIPT_DIR/pinterest_pin_generator.py" "$HERMES_SCRIPTS/pinterest_pin_generator.py"
         echo "   ✓ Copied to $HERMES_SCRIPTS/pinterest_pin_generator.py"
     fi
+    if [[ -f "$SCRIPT_DIR/pinterest_pin_uploader.py" ]]; then
+        cp "$SCRIPT_DIR/pinterest_pin_uploader.py" "$HERMES_SCRIPTS/pinterest_pin_uploader.py"
+        echo "   ✓ Copied to $HERMES_SCRIPTS/pinterest_pin_uploader.py"
+    fi
 fi
 
 # --- Step 2: Create / update the venv ---
