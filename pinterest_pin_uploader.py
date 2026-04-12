@@ -99,6 +99,8 @@ def main():
         "pinterest_password": env.get("PINTEREST_PASSWORD", ""),
         "telegram_bot_token": env.get("TELEGRAM_BOT_TOKEN", ""),
         "telegram_chat_id": env.get("TELEGRAM_HOME_CHANNEL", ""),
+        "google_token_path": os.path.join(HERMES_HOME, "google_token.json"),
+        "drive_pins_folder_id": "1sggNrixmH_jWFTLhspoy3i3YM7GVir7I",
         "board_name": "SmartyPants9786",
         "board_url": "https://www.pinterest.com/SmartyPants2786/smartypants9786/",
         "stats": {
@@ -109,6 +111,7 @@ def main():
             "remaining_after_batch": len(pending) - len(batch),
         },
         "batch": batch,
+        "instructions_for_agent": "After successfully uploading a pin to Pinterest, delete its JSON file from Google Drive PinterestAutomation/Pins folder using execute_code. Search for the file by _file_name in drive_pins_folder_id and delete it.",
     }
 
     print(json.dumps(output, indent=2))
