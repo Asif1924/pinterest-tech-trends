@@ -112,6 +112,8 @@ def parse_csv(csv_content):
             "price_range": row.get("Price Range", "").strip(),
             "amazon_link": row.get("Amazon Link", "").strip(),
             "pin_caption": row.get("Pin Caption Idea", "").strip(),
+            "image_1": row.get("Image 1", "").strip(),
+            "image_2": row.get("Image 2", "").strip(),
         })
     return products
 

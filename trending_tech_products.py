@@ -111,6 +111,43 @@ def make_affiliate_link(product_name):
     return f"https://www.amazon.com/s?k={terms}&tag={AFFILIATE_TAG}"
 
 
+def scrape_amazon_product_images(product_name, num_images=2):
+    """Scrape product images from Amazon search results.
+    
+    Returns a list of image dicts with 'large' and 'medium' URLs.
+    Pinterest optimal: 1000x1500 (2:3). We provide _AC_SL1500_ (large)
+    and _AC_SL1000_ (medium) variants via Amazon's dynamic resizing.
+    """
+    query = urllib.parse.quote_plus(product_name)
+    url = f"https://www.amazon.com/s?k={query}"
+    html = fetch_url(url, timeout=15)
+    if html.startswith("ERROR"):
+        return []
+
+    # Extract unique base image IDs from Amazon CDN URLs
+    bases = re.findall(
+        r'(https://m\.media-amazon\.com/images/I/[A-Za-z0-9+%-]+)\._[^.]+_\.(?:jpg|png)',
+        html,
+    )
+    unique_bases = list(dict.fromkeys(bases))
+
+    # Skip tiny icons — filter for actual product images
+    # Product images typically have longer IDs (10+ chars after /I/)
+    images = []
+    for base in unique_bases:
+        if len(images) >= num_images:
+            break
+        img_id = base.split("/I/")[-1]
+        if len(img_id) < 8:
+            continue  # skip tiny icons
+        images.append({
+            "large": f"{base}._AC_SL1500_.jpg",
+            "medium": f"{base}._AC_SL1000_.jpg",
+        })
+
+    return images
+
+
 def extract_products_from_text(text, source_name):
     """
     Try to extract product names/descriptions from scraped text.
@@ -301,7 +338,11 @@ def main():
             "Your job: select the TOP 20 most trending, pin-worthy tech products. "
             "For each, provide: name, description, why trending, price range, "
             "Amazon affiliate link (use /s?k= search format with tag=allitechstore-20), "
-            "category, and a Pinterest pin caption idea. "
+            "category, Pinterest pin caption idea, and 2 product images. "
+            "IMAGES: Use the scrape_amazon_product_images() function from this script "
+            "(available at ~/.hermes/scripts/trending_tech_products.py) via execute_code "
+            "to fetch 2 Amazon product images per product. Include image_1 and image_2 "
+            "columns in the CSV (use the 'large' URL). "
             "Generate the CSV and email it. Format the Telegram message as plain text."
         ),
     }
