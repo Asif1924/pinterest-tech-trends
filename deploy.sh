@@ -56,6 +56,10 @@ if [[ "$DRY_RUN" == true ]]; then
 else
     cp "$SCRIPT_DIR/trending_tech_products.py" "$HERMES_SCRIPTS/trending_tech_products.py"
     echo "   ✓ Copied to $HERMES_SCRIPTS/trending_tech_products.py"
+    if [[ -f "$SCRIPT_DIR/config.json" ]]; then
+        cp "$SCRIPT_DIR/config.json" "$HERMES_SCRIPTS/pinterest_config.json"
+        echo "   ✓ Copied config to $HERMES_SCRIPTS/pinterest_config.json"
+    fi
     if [[ -f "$SCRIPT_DIR/pinterest_pin_generator.py" ]]; then
         cp "$SCRIPT_DIR/pinterest_pin_generator.py" "$HERMES_SCRIPTS/pinterest_pin_generator.py"
         echo "   ✓ Copied to $HERMES_SCRIPTS/pinterest_pin_generator.py"

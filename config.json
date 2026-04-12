@@ -1,0 +1,20 @@
+{
+  "affiliate_tag": "allitechstore-20",
+  "link_strategy": 2,
+  "link_strategies": {
+    "1": {
+      "name": "Search Links",
+      "description": "Uses Amazon search URL (/s?k=product+name). Always works, never breaks. User lands on search results page — extra click to reach product.",
+      "example": "https://www.amazon.com/s?k=Dyson+Handheld+Fan&tag=allitechstore-20"
+    },
+    "2": {
+      "name": "Direct Product Links",
+      "description": "Scrapes the actual ASIN from Amazon search results and builds a direct product link (/dp/ASIN). User lands directly on product page — higher conversion rate. May occasionally break if ASIN is delisted.",
+      "example": "https://www.amazon.com/dp/B0C1SRTW9F?tag=allitechstore-20"
+    }
+  },
+  "pinterest_board": "SmartyPants9786",
+  "email_to": "alli.asif@gmail.com",
+  "top_n_products": 20,
+  "max_pins_per_upload_batch": 5
+}

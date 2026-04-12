@@ -36,6 +36,78 @@ from email import encoders
 # ── Config ──────────────────────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 AFFILIATE_TAG = "allitechstore-20"
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "pinterest_config.json")
+
+
+def load_config():
+    """Load config from pinterest_config.json."""
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+# ── Affiliate Link Strategies ───────────────────────────────────────────────
+
+def affiliate_link_strategy_1(product_name, affiliate_tag=AFFILIATE_TAG):
+    """Strategy 1: Search Links.
+    
+    Builds an Amazon search URL. Always works, never breaks.
+    User lands on search results — extra click to reach product.
+    Lower conversion rate but 100% reliable.
+    
+    Example: https://www.amazon.com/s?k=Dyson+Handheld+Fan&tag=allitechstore-20
+    """
+    terms = urllib.parse.quote_plus(product_name)
+    return f"https://www.amazon.com/s?k={terms}&tag={affiliate_tag}"
+
+
+def affiliate_link_strategy_2(product_name, affiliate_tag=AFFILIATE_TAG):
+    """Strategy 2: Direct Product Links.
+    
+    Scrapes the actual ASIN from Amazon search results and builds a
+    direct /dp/ASIN link. User lands directly on product page — higher
+    conversion rate. Falls back to strategy 1 if ASIN can't be found.
+    
+    Example: https://www.amazon.com/dp/B0C1SRTW9F?tag=allitechstore-20
+    """
+    query = urllib.parse.quote_plus(product_name)
+    url = f"https://www.amazon.com/s?k={query}"
+    html = fetch_url(url, timeout=15)
+    if html.startswith("ERROR"):
+        return affiliate_link_strategy_1(product_name, affiliate_tag)
+
+    # Extract ASINs from data-asin attributes
+    asins = re.findall(r'data-asin="([A-Z0-9]{10})"', html)
+    # Dedupe preserving order
+    seen = set()
+    unique = []
+    for a in asins:
+        if a and a not in seen:
+            seen.add(a)
+            unique.append(a)
+
+    if unique:
+        return f"https://www.amazon.com/dp/{unique[0]}?tag={affiliate_tag}"
+
+    # Fallback to strategy 1
+    return affiliate_link_strategy_1(product_name, affiliate_tag)
+
+
+_STRATEGIES = {
+    1: affiliate_link_strategy_1,
+    2: affiliate_link_strategy_2,
+}
+
+
+def make_affiliate_link(product_name, strategy=None, affiliate_tag=AFFILIATE_TAG):
+    """Generate affiliate link using the configured strategy."""
+    if strategy is None:
+        config = load_config()
+        strategy = config.get("link_strategy", 1)
+    fn = _STRATEGIES.get(strategy, affiliate_link_strategy_1)
+    return fn(product_name, affiliate_tag)
 DRIVE_FOLDER_ID = "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L"  # PinterestAutomation
 CSV_PATH = "/tmp/trending_tech_products.csv"
 TOP_N = 20
@@ -150,10 +222,6 @@ def html_to_text(html):
         pass
     return parser.get_text()
 
-
-def make_affiliate_link(product_name):
-    terms = urllib.parse.quote_plus(product_name)
-    return f"https://www.amazon.com/s?k={terms}&tag={AFFILIATE_TAG}"
 
 
 # ── Scrapers ────────────────────────────────────────────────────────────────
@@ -591,7 +659,10 @@ def main():
     today_str = today.strftime("%B %d, %Y")
     env = load_env()
 
-    send_telegram(f"🔍 Job 1 started: Scraping trending tech products ({today.strftime('%Y-%m-%d')})", env)
+    config = load_config()
+    strategy = config.get("link_strategy", 1)
+    strategy_name = config.get("link_strategies", {}).get(str(strategy), {}).get("name", f"Strategy {strategy}")
+    send_telegram(f"🔍 Job 1 started: Scraping trending tech products ({today.strftime('%Y-%m-%d')})\nAffiliate links: {strategy_name}", env)
 
     # Step 1: Scrape all sources
     all_products = []
