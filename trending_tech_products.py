@@ -652,6 +652,24 @@ def main():
         summary += f", emailed"
     send_telegram(summary, env)
 
+    # Step 8: Run Job 2 (pin generator) immediately
+    if drive_link:
+        try:
+            import subprocess
+            pin_gen_script = os.path.join(os.path.dirname(__file__), "pinterest_pin_generator.py")
+            result = subprocess.run(
+                [sys.executable, pin_gen_script],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.stdout.strip() and result.stdout.strip() != "[SILENT]":
+                print()
+                print("--- PIN GENERATOR ---")
+                print(result.stdout.strip())
+            if result.returncode != 0 and result.stderr:
+                send_telegram(f"⚠️ Job 2 error: {result.stderr[:200]}", env)
+        except Exception as e:
+            send_telegram(f"⚠️ Job 2 failed to run: {e}", env)
+
     # Output report (delivered to Telegram by Hermes)
     print(report)
 
