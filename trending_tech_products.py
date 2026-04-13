@@ -283,7 +283,7 @@ def scrape_amazon_trending():
 
 def scrape_google_trending_tech():
     products = []
-    for query in ["trending tech products this week 2026", "best selling gadgets Amazon electronics 2026"]:
+    for query in ["trending tech products this week", "best selling gadgets on Amazon electronics", "coolest new tech gadgets this month"]:
         html = fetch_url(f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}&num=15")
         if not html.startswith("ERROR"):
             products.extend(extract_products_from_text(html_to_text(html), f"google:{query[:30]}"))

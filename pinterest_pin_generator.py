@@ -109,26 +109,59 @@ def get_drive_service():
 
 
 def ensure_pins_folder(service):
+    """Finds or creates the 'Pins' subfolder in Google Drive."""
     global PINS_FOLDER_ID
+
+    # 1. Check if PINS_FOLDER_ID is already known and valid
     if PINS_FOLDER_ID:
         try:
-            service.files().get(fileId=PINS_FOLDER_ID, fields="id,trashed").execute()
-            return PINS_FOLDER_ID
-        except Exception:
-            pass
-    results = service.files().list(
-        q=f"'{DRIVE_FOLDER_ID}' in parents and name='Pins' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        fields="files(id)",
-    ).execute()
-    if results.get("files"):
-        PINS_FOLDER_ID = results["files"][0]["id"]
+            f = service.files().get(fileId=PINS_FOLDER_ID, fields="id, name, trashed").execute()
+            if not f.get('trashed'):
+                print(f"Confirmed existing 'Pins' folder: {PINS_FOLDER_ID}")
+                return PINS_FOLDER_ID
+        except Exception as e:
+            print(f"Existing PINS_FOLDER_ID {PINS_FOLDER_ID} is invalid, searching. Error: {e}")
+            PINS_FOLDER_ID = None # Reset if invalid
+
+    # 2. If no valid ID, search for the 'Pins' folder within the parent
+    print(f"Searching for 'Pins' folder inside parent: {DRIVE_FOLDER_ID}")
+    query = f"'{DRIVE_FOLDER_ID}' in parents and name='Pins' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    files = results.get("files", [])
+
+    if files:
+        PINS_FOLDER_ID = files[0]["id"]
+        print(f"Found 'Pins' folder by search: {PINS_FOLDER_ID}")
         return PINS_FOLDER_ID
-    folder = service.files().create(body={
-        "name": "Pins", "mimeType": "application/vnd.google-apps.folder",
-        "parents": [DRIVE_FOLDER_ID],
-    }, fields="id").execute()
-    PINS_FOLDER_ID = folder["id"]
-    return PINS_FOLDER_ID
+
+    # 3. If not found, create it
+    print(f"Folder not found, creating 'Pins' inside {DRIVE_FOLDER_ID}...")
+    folder_metadata = {
+        "name": "Pins",
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [DRIVE_FOLDER_ID]
+    }
+    try:
+        folder = service.files().create(body=folder_metadata, fields="id").execute()
+        PINS_FOLDER_ID = folder["id"]
+        print(f"Successfully created 'Pins' folder with ID: {PINS_FOLDER_ID}")
+        
+        # Also update the config file for future runs
+        try:
+            with open(CONFIG_PATH, 'r+') as f:
+                config_data = json.load(f)
+                config_data['google_drive']['pins_folder_id'] = PINS_FOLDER_ID
+                f.seek(0)
+                json.dump(config_data, f, indent=2)
+                f.truncate()
+            print("Updated pinterest_config.json with new PINS_FOLDER_ID.")
+        except Exception as config_e:
+            print(f"Warning: Failed to write new PINS_FOLDER_ID to config file: {config_e}")
+
+        return PINS_FOLDER_ID
+    except Exception as e:
+        print(f"FATAL: Failed to create 'Pins' folder. Error: {e}")
+        raise e
 
 
 def get_latest_csv(service):
