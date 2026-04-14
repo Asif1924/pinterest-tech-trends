@@ -426,7 +426,7 @@ def fetch_images_for_products(products):
 
 def generate_csv(products):
     fields = ["Number", "Product Name", "Category", "Description", "Why Trending",
-              "Price Range", "Amazon Link", "Pin Caption Idea", "Image 1", "Image 2"]
+              "Price Range", "Amazon Link", "Pin Caption Idea", "Image 1", "Image 2", "Procured"]
     with open(CSV_PATH, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
@@ -437,6 +437,7 @@ def generate_csv(products):
                 "Why Trending": p["why_trending"], "Price Range": p["price_range"],
                 "Amazon Link": p["amazon_link"], "Pin Caption Idea": p["pin_caption"],
                 "Image 1": p["image_1"], "Image 2": p["image_2"],
+                "Procured": "Yes" if p.get("procured", False) else "No",
             })
     return CSV_PATH
 
@@ -503,6 +504,27 @@ def email_csv(csv_path, products, drive_link, env):
     if not email_addr or not email_pass:
         return "Email credentials not configured"
 
+    # Load procured products list
+    procured_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "procured_products.json")
+    procured_list = []
+    try:
+        with open(procured_file) as f:
+            procured_data = json.load(f)
+            procured_list = [p.lower() for p in procured_data.get("procured", [])]
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Mark products as procured or new
+    new_products = []
+    procured_products = []
+    for p in products:
+        is_procured = any(proc in p['name'].lower() for proc in procured_list)
+        p['procured'] = is_procured
+        if is_procured:
+            procured_products.append(p)
+        else:
+            new_products.append(p)
+
     today = datetime.now(timezone.utc).strftime("%B %d, %Y")
     msg = MIMEMultipart()
     msg["From"] = email_addr
@@ -510,13 +532,36 @@ def email_csv(csv_path, products, drive_link, env):
     msg["Subject"] = f"Daily Trending Tech Products for Pinterest - {today}"
 
     body = f"Trending Tech Products Report - {today}\n\n"
-    body += f"{len(products)} products curated from 6 sources.\n"
+    body += f"Total: {len(products)} products | New: {len(new_products)} | Already Procured: {len(procured_products)}\n"
+    body += "=" * 60 + "\n"
+    
     if drive_link:
         body += f"\nGoogle Drive: {drive_link}\n"
-    body += "\nTop products:\n"
-    for p in products[:5]:
-        body += f"  - {p['name']} ({p['category']})\n"
-    body += f"\n... and {len(products) - 5} more. See attached CSV for full list."
+    
+    if new_products:
+        body += f"\n🆕 NEW PRODUCTS TO CONSIDER ({len(new_products)}):\n"
+        body += "-" * 40 + "\n"
+        for i, p in enumerate(new_products[:10], 1):
+            body += f"{i}. {p['name']}\n"
+            body += f"   Category: {p['category']}\n"
+            body += f"   Why Trending: {p['why_trending']}\n"
+            if p.get('price_range'):
+                body += f"   Price: {p['price_range']}\n"
+            body += "\n"
+        if len(new_products) > 10:
+            body += f"... and {len(new_products) - 10} more new products in the CSV.\n"
+    
+    if procured_products:
+        body += f"\n✓ ALREADY PROCURED ({len(procured_products)}):\n"
+        body += "-" * 40 + "\n"
+        for p in procured_products[:5]:
+            body += f"  • {p['name']} ({p['category']})\n"
+        if len(procured_products) > 5:
+            body += f"  ... and {len(procured_products) - 5} more.\n"
+    
+    body += "\n" + "=" * 60 + "\n"
+    body += "See attached CSV for full details including Amazon links and image URLs.\n"
+    body += "\nTo mark products as procured, update: procured_products.json"
 
     msg.attach(MIMEText(body, "plain"))
     with open(csv_path, "rb") as f:
@@ -542,6 +587,13 @@ def email_csv(csv_path, products, drive_link, env):
 
 def format_telegram_report(products, today_str):
     lines = [f"DAILY TRENDING TECH PRODUCTS FOR PINTEREST", today_str, ""]
+    
+    # Count procured vs new
+    new_count = sum(1 for p in products if not p.get("procured", False))
+    procured_count = sum(1 for p in products if p.get("procured", False))
+    lines.append(f"Total: {len(products)} | New: {new_count} | Procured: {procured_count}")
+    lines.append("")
+    
     by_cat = {}
     for p in products:
         by_cat.setdefault(p["category"], []).append(p)
@@ -550,7 +602,8 @@ def format_telegram_report(products, today_str):
             continue
         lines.extend([f"--- {cat.upper()} ---", ""])
         for p in by_cat[cat]:
-            lines.append(f"{p['number']}. {p['name']}")
+            status = " ✓" if p.get("procured", False) else " 🆕"
+            lines.append(f"{p['number']}.{status} {p['name']}")
             lines.append(p['description'][:120])
             if p['price_range']:
                 lines.append(f"Price: {p['price_range']}")
@@ -595,6 +648,19 @@ def main():
     # Step 3: Fetch Amazon images
     products = fetch_images_for_products(products)
     img_count = sum(1 for p in products if p["image_1"])
+
+    # Step 3.5: Mark procured products
+    procured_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "procured_products.json")
+    procured_list = []
+    try:
+        with open(procured_file) as f:
+            procured_data = json.load(f)
+            procured_list = [p.lower() for p in procured_data.get("procured", [])]
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    
+    for p in products:
+        p["procured"] = any(proc in p['name'].lower() for proc in procured_list)
 
     # Step 4: Generate CSV
     csv_path = generate_csv(products)

@@ -4,12 +4,12 @@
   "link_strategies": {
     "1": {
       "name": "Search Links",
-      "description": "Uses Amazon search URL (/s?k=product+name). Always works, never breaks. User lands on search results page \u2014 extra click to reach product.",
+      "description": "Uses Amazon search URL (/s?k=product+name). Always works, never breaks. User lands on search results page — extra click to reach product.",
       "example": "https://www.amazon.com/s?k=Dyson+Handheld+Fan&tag=allitechstore-20"
     },
     "2": {
       "name": "Direct Product Links",
-      "description": "Scrapes the actual ASIN from Amazon search results and builds a direct product link (/dp/ASIN). User lands directly on product page \u2014 higher conversion rate. May occasionally break if ASIN is delisted.",
+      "description": "Scrapes the actual ASIN from Amazon search results and builds a direct product link (/dp/ASIN). User lands directly on product page — higher conversion rate. May occasionally break if ASIN is delisted.",
       "example": "https://www.amazon.com/dp/B0C1SRTW9F?tag=allitechstore-20"
     }
   },
@@ -22,7 +22,7 @@
   },
   "google_drive": {
     "automation_folder_id": "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L",
-    "pins_folder_id": "1rvWorf8LgZdumStWxIo8WZQyrhVKWbGN"
+    "pins_folder_id": "1p4JS0GDHVny1IBDbcSNghgKHaY_64E5D"
   },
   "csv_path": "/tmp/trending_tech_products.csv",
   "timeouts": {
