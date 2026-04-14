@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
 """
-Pinterest Pin Generator — FULLY AUTOMATED (no AI needed)
+Pinterest Pin Generator — Email-Based Report
 
-Polls Google Drive PinterestAutomation folder, downloads the latest CSV,
-creates Pinterest pin JSON files, uploads them to Drive Pins folder.
+Reads the latest trending tech products CSV, generates Pinterest pin data,
+and emails a comprehensive summary with all pin details.
 
-All settings in pinterest_config.json — no hardcoded values.
-Output: Plain text summary to stdout.
+No Google Drive dependency - pure local processing with email delivery.
+Output: Plain text summary to stdout + detailed email report.
 Cost: $0 per run.
 """
 
 import os
 import sys
 import csv
-import io
 import json
+import smtplib
 from pathlib import Path
 from datetime import datetime, timezone
-
-try:
-    from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
-except ImportError:
-    print("ERROR: Google API libraries not installed.")
-    sys.exit(1)
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 # ── Config ──────────────────────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
@@ -42,10 +37,8 @@ def load_config():
 
 CFG = load_config()
 PINS_DIR = os.path.join(HERMES_HOME, "pinterest_pins")
-DRIVE_FOLDER_ID = CFG.get("google_drive", {}).get("automation_folder_id", "")
-PINS_FOLDER_ID = CFG.get("google_drive", {}).get("pins_folder_id", "")
 BOARD_NAME = CFG.get("pinterest", {}).get("board_name", "SmartyPants9786")
-TIMEOUT_TELEGRAM = CFG.get("timeouts", {}).get("telegram_api", 10)
+CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
 
 HASHTAGS = {
     "Smart Home and IoT": "#SmartHome #IoT #HomeAutomation #TechHome #GadgetGoals",
@@ -56,9 +49,10 @@ HASHTAGS = {
 }
 
 
-# ── Telegram ────────────────────────────────────────────────────────────────
+# ── Email Functions ──────────────────────────────────────────────────────────
 
 def _load_env_var(name):
+    """Load environment variable from .env file"""
     try:
         with open(os.path.join(HERMES_HOME, ".env")) as f:
             for line in f:
@@ -72,195 +66,145 @@ def _load_env_var(name):
     return ""
 
 
-def send_telegram(text):
-    import urllib.request as _ur
-    token = _load_env_var("TELEGRAM_BOT_TOKEN")
-    chat_id = _load_env_var("TELEGRAM_HOME_CHANNEL")
-    if not token or not chat_id:
-        return
-    try:
-        data = json.dumps({"chat_id": chat_id, "text": text}).encode()
-        req = _ur.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=data, headers={"Content-Type": "application/json"}
-        )
-        _ur.urlopen(req, timeout=TIMEOUT_TELEGRAM)
-    except Exception:
-        pass
-
-
-# ── Google Drive ────────────────────────────────────────────────────────────
-
-def get_drive_service():
-    token_path = os.path.join(HERMES_HOME, "google_token.json")
-    with open(token_path) as f:
-        td = json.load(f)
-    creds = Credentials(
-        token=td["token"], refresh_token=td["refresh_token"],
-        token_uri=td["token_uri"], client_id=td["client_id"],
-        client_secret=td["client_secret"], scopes=td["scopes"],
-    )
-    if creds.expired:
-        creds.refresh(Request())
-        td["token"] = creds.token
-        with open(token_path, "w") as f:
-            json.dump(td, f, indent=2)
-    return build("drive", "v3", credentials=creds)
-
-
-def ensure_pins_folder(service):
-    """Finds or creates the 'Pins' subfolder in Google Drive."""
-    global PINS_FOLDER_ID
-
-    # 1. Check if PINS_FOLDER_ID is already known and valid
-    if PINS_FOLDER_ID:
-        try:
-            f = service.files().get(fileId=PINS_FOLDER_ID, fields="id, name, trashed").execute()
-            if not f.get('trashed'):
-                print(f"Confirmed existing 'Pins' folder: {PINS_FOLDER_ID}")
-                return PINS_FOLDER_ID
-        except Exception as e:
-            print(f"Existing PINS_FOLDER_ID {PINS_FOLDER_ID} is invalid, searching. Error: {e}")
-            PINS_FOLDER_ID = None # Reset if invalid
-
-    # 2. If no valid ID, search for the 'Pins' folder within the parent
-    print(f"Searching for 'Pins' folder inside parent: {DRIVE_FOLDER_ID}")
-    query = f"'{DRIVE_FOLDER_ID}' in parents and name='Pins' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-    results = service.files().list(q=query, fields="files(id, name)").execute()
-    files = results.get("files", [])
-
-    if files:
-        PINS_FOLDER_ID = files[0]["id"]
-        print(f"Found 'Pins' folder by search: {PINS_FOLDER_ID}")
-        return PINS_FOLDER_ID
-
-    # 3. If not found, create it
-    print(f"Folder not found, creating 'Pins' inside {DRIVE_FOLDER_ID}...")
-    folder_metadata = {
-        "name": "Pins",
-        "mimeType": "application/vnd.google-apps.folder",
-        "parents": [DRIVE_FOLDER_ID]
-    }
-    try:
-        folder = service.files().create(body=folder_metadata, fields="id").execute()
-        PINS_FOLDER_ID = folder["id"]
-        print(f"Successfully created 'Pins' folder with ID: {PINS_FOLDER_ID}")
+def send_email_report(subject, body_text, pins_data, errors):
+    """Send detailed email report with pin summaries"""
+    email_address = _load_env_var("EMAIL_ADDRESS")
+    email_password = _load_env_var("EMAIL_PASSWORD")
+    
+    if not email_address or not email_password:
+        print("WARNING: Email credentials not found in .env file")
+        return False
+    
+    # Create email message
+    msg = MIMEMultipart()
+    msg['From'] = email_address
+    msg['To'] = email_address
+    msg['Subject'] = subject
+    
+    # Create HTML body with pin details
+    html_body = f"""
+    <html>
+    <head></head>
+    <body>
+        <h2>Pinterest Pin Generator Report</h2>
+        <p><strong>Date:</strong> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</p>
         
-        # Also update the config file for future runs
-        try:
-            with open(CONFIG_PATH, 'r+') as f:
-                config_data = json.load(f)
-                config_data['google_drive']['pins_folder_id'] = PINS_FOLDER_ID
-                f.seek(0)
-                json.dump(config_data, f, indent=2)
-                f.truncate()
-            print("Updated pinterest_config.json with new PINS_FOLDER_ID.")
-        except Exception as config_e:
-            print(f"Warning: Failed to write new PINS_FOLDER_ID to config file: {config_e}")
-
-        return PINS_FOLDER_ID
+        <h3>📊 Summary</h3>
+        <ul>
+            <li><strong>Total Pins Created:</strong> {len(pins_data)}</li>
+            <li><strong>Errors:</strong> {len(errors)}</li>
+            <li><strong>Board:</strong> {BOARD_NAME}</li>
+        </ul>
+        
+        <h3>📌 Pin Details</h3>
+    """
+    
+    for i, pin in enumerate(pins_data, 1):
+        procured_status = "✓ ALREADY PROCURED" if pin.get("procured", False) else "🆕 NEW PRODUCT"
+        
+        html_body += f"""
+        <div style="border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 8px;">
+            <h4>Pin #{i}: {pin['product_name']} {procured_status}</h4>
+            <p><strong>Title:</strong> {pin['title']}</p>
+            <p><strong>Category:</strong> {pin['category']}</p>
+            <p><strong>Price Range:</strong> {pin['price_range']}</p>
+            <p><strong>Description:</strong> {pin['description']}</p>
+            <p><strong>Amazon Link:</strong> <a href="{pin['link']}">{pin['link']}</a></p>
+            <p><strong>Images:</strong></p>
+            <ul>
+        """
+        
+        for img in pin.get('images', []):
+            html_body += f'<li><a href="{img["url"]}">{img["url"]}</a></li>'
+        
+        html_body += """
+            </ul>
+            <p><strong>Alt Text:</strong> {}</p>
+        </div>
+        """.format(pin['alt_text'])
+    
+    if errors:
+        html_body += """
+        <h3>❌ Errors</h3>
+        <ul>
+        """
+        for product_name, error_msg in errors:
+            html_body += f"<li><strong>{product_name}:</strong> {error_msg}</li>"
+        html_body += "</ul>"
+    
+    html_body += """
+        <h3>📁 Local Storage</h3>
+        <p>Pin JSON files saved to: <code>{}</code></p>
+        
+        <hr>
+        <p><em>This report was generated automatically by the Pinterest Pin Generator script.</em></p>
+    </body>
+    </html>
+    """.format(PINS_DIR)
+    
+    # Attach both plain text and HTML versions
+    msg.attach(MIMEText(body_text, 'plain'))
+    msg.attach(MIMEText(html_body, 'html'))
+    
+    # Send email
+    try:
+        smtp_config = CFG.get("smtp_defaults", {})
+        server = smtplib.SMTP(smtp_config.get("host", "smtp.gmail.com"), 
+                            smtp_config.get("port", 587))
+        server.starttls()
+        server.login(email_address, email_password)
+        
+        text = msg.as_string()
+        server.sendmail(email_address, email_address, text)
+        server.quit()
+        
+        print(f"✅ Email sent successfully to {email_address}")
+        return True
+        
     except Exception as e:
-        print(f"FATAL: Failed to create 'Pins' folder. Error: {e}")
-        raise e
+        print(f"❌ Failed to send email: {e}")
+        return False
 
 
-def get_latest_csv(service):
-    results = service.files().list(
-        q=f"'{DRIVE_FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
-        orderBy="createdTime desc", pageSize=1,
-        fields="files(id, name, createdTime)",
-    ).execute()
-    files = results.get("files", [])
-    if not files:
-        return None, None
-    latest = files[0]
-    request = service.files().get_media(fileId=latest["id"])
-    buffer = io.BytesIO()
-    downloader = MediaIoBaseDownload(buffer, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return latest, buffer.getvalue().decode("utf-8")
+# ── CSV Processing ──────────────────────────────────────────────────────────
 
-
-def cleanup_old_pins_local():
-    os.makedirs(PINS_DIR, exist_ok=True)
-    count = 0
-    for f in Path(PINS_DIR).glob("pin_*.json"):
-        f.unlink()
-        count += 1
-    return count
-
-
-def cleanup_old_pins_drive(service):
-    count = 0
-    page_token = None
-    while True:
-        results = service.files().list(
-            q=f"'{PINS_FOLDER_ID}' in parents and trashed=false",
-            fields="nextPageToken, files(id, name)", pageSize=100, pageToken=page_token,
-        ).execute()
-        for f in results.get("files", []):
-            service.files().delete(fileId=f["id"]).execute()
-            count += 1
-        page_token = results.get("nextPageToken")
-        if not page_token:
-            break
-    return count
-
-
-def cleanup_old_csvs_drive(service, keep_latest=1):
-    results = service.files().list(
-        q=f"'{DRIVE_FOLDER_ID}' in parents and mimeType='text/csv' and trashed=false",
-        orderBy="createdTime desc", fields="files(id, name, createdTime)", pageSize=50,
-    ).execute()
-    files = results.get("files", [])
-    deleted = 0
-    for f in files[keep_latest:]:
-        service.files().delete(fileId=f["id"]).execute()
-        deleted += 1
-    return deleted
-
-
-def upload_pin_to_drive(service, pin_path, pin_filename):
-    file_metadata = {
-        "name": pin_filename, "parents": [PINS_FOLDER_ID],
-        "mimeType": "application/json",
-    }
-    media = MediaFileUpload(pin_path, mimetype="application/json")
-    existing = service.files().list(
-        q=f"name='{pin_filename}' and '{PINS_FOLDER_ID}' in parents and trashed=false",
-        fields="files(id)",
-    ).execute().get("files", [])
-    if existing:
-        file = service.files().update(fileId=existing[0]["id"], media_body=media, fields="id").execute()
-    else:
-        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-    return file["id"]
+def load_csv_data():
+    """Load and parse the trending tech products CSV"""
+    if not os.path.exists(CSV_PATH):
+        print(f"ERROR: CSV file not found at {CSV_PATH}")
+        return []
+    
+    products = []
+    try:
+        with open(CSV_PATH, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                products.append({
+                    "number": row.get("Number", "").strip(),
+                    "name": row.get("Product Name", "").strip(),
+                    "category": row.get("Category", "").strip(),
+                    "description": row.get("Description", "").strip(),
+                    "why_trending": row.get("Why Trending", "").strip(),
+                    "price_range": row.get("Price Range", "").strip(),
+                    "amazon_link": row.get("Amazon Link", "").strip(),
+                    "pin_caption": row.get("Pin Caption Idea", "").strip(),
+                    "image_1": row.get("Image 1", "").strip(),
+                    "image_2": row.get("Image 2", "").strip(),
+                    "procured": row.get("Procured", "").strip().lower() in ['yes', 'true', '1', 'already procured']
+                })
+        
+        print(f"✅ Loaded {len(products)} products from CSV")
+        return products
+        
+    except Exception as e:
+        print(f"ERROR: Failed to read CSV: {e}")
+        return []
 
 
 # ── Pin Creation ────────────────────────────────────────────────────────────
 
-def parse_csv(csv_content):
-    products = []
-    reader = csv.DictReader(io.StringIO(csv_content))
-    for row in reader:
-        products.append({
-            "number": row.get("Number", "").strip(),
-            "name": row.get("Product Name", "").strip(),
-            "category": row.get("Category", "").strip(),
-            "description": row.get("Description", "").strip(),
-            "why_trending": row.get("Why Trending", "").strip(),
-            "price_range": row.get("Price Range", "").strip(),
-            "amazon_link": row.get("Amazon Link", "").strip(),
-            "pin_caption": row.get("Pin Caption Idea", "").strip(),
-            "image_1": row.get("Image 1", "").strip(),
-            "image_2": row.get("Image 2", "").strip(),
-        })
-    return products
-
-
 def create_pin_json(product, date_str):
+    """Generate Pinterest pin JSON data for a product"""
     name = product["name"]
     category = product["category"]
     price = product["price_range"]
@@ -269,12 +213,14 @@ def create_pin_json(product, date_str):
     link = product["amazon_link"]
     image_1 = product["image_1"]
     image_2 = product["image_2"]
+    procured = product.get("procured", False)
 
     category_tags = HASHTAGS.get(category, "#TechGadgets #Innovation")
     pin_description = caption if caption else f"{name} - {description}"
     if category_tags not in pin_description:
         pin_description = f"{pin_description} {category_tags}"
     pin_description = pin_description[:500]
+    
     title = f"{name} - {price}" if price else name
     title = title[:100]
 
@@ -285,16 +231,35 @@ def create_pin_json(product, date_str):
         images.append({"url": image_2, "size": "large"})
 
     return {
-        "product_name": name, "board": BOARD_NAME.lower(),
-        "title": title, "description": pin_description,
-        "link": link, "category": category,
+        "product_name": name,
+        "board": BOARD_NAME.lower(),
+        "title": title,
+        "description": pin_description,
+        "link": link,
+        "category": category,
         "alt_text": f"Product image of {name} - {description[:100]}",
         "images": images,
         "primary_image": image_1 or image_2 or "",
         "price_range": price,
+        "procured": procured,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "status": "pending_upload",
+        "status": "ready_for_upload",
     }
+
+
+def cleanup_old_pins_local():
+    """Clean up old pin files from local directory"""
+    os.makedirs(PINS_DIR, exist_ok=True)
+    
+    deleted = 0
+    try:
+        for file_path in Path(PINS_DIR).glob("*.json"):
+            file_path.unlink()
+            deleted += 1
+    except Exception as e:
+        print(f"Warning: Could not clean old pins: {e}")
+    
+    return deleted
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -302,82 +267,89 @@ def create_pin_json(product, date_str):
 def main():
     today = datetime.now(timezone.utc)
     date_str = today.strftime("%Y%m%d")
-
-    send_telegram(f"📌 Job 2 started: Generating Pinterest pins ({today.strftime('%Y-%m-%d')})")
-
-    try:
-        service = get_drive_service()
-    except Exception as e:
-        print(f"ERROR: Google Drive auth failed: {e}")
-        return
-
-    try:
-        file_info, csv_content = get_latest_csv(service)
-    except Exception as e:
-        print(f"ERROR: Failed to download CSV from Drive: {e}")
-        return
-
-    if not file_info or not csv_content:
-        print("[SILENT]")
-        return
-
-    products = parse_csv(csv_content)
+    
+    print(f"📌 Pinterest Pin Generator started: {today.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # Load product data from CSV
+    products = load_csv_data()
     if not products:
-        print("[SILENT]")
+        print("❌ No products found or CSV loading failed")
         return
-
-    # Ensure Pins folder exists, then clean up
-    ensure_pins_folder(service)
-    local_deleted = cleanup_old_pins_local()
-    drive_pins_deleted = cleanup_old_pins_drive(service)
-    old_csvs_deleted = cleanup_old_csvs_drive(service, keep_latest=1)
-    new_products = products
-
-    # Create pin files and upload to Drive
+    
+    # Clean up old pin files
+    deleted_count = cleanup_old_pins_local()
+    print(f"🗑️ Cleaned up {deleted_count} old pin files")
+    
+    # Create pin files
     created = []
-    uploaded = []
     errors = []
-
-    for product in new_products:
-        num = product["number"].zfill(2)
+    pins_data = []
+    
+    for product in products:
+        if not product["name"]:  # Skip empty products
+            continue
+            
+        num = product["number"].zfill(2) if product["number"] else str(len(created) + 1).zfill(2)
         filename = f"pin_{date_str}_{num}.json"
         filepath = os.path.join(PINS_DIR, filename)
+        
         try:
             pin_data = create_pin_json(product, date_str)
-            with open(filepath, "w") as f:
-                json.dump(pin_data, f, indent=2)
+            
+            # Save JSON file locally
+            with open(filepath, "w", encoding='utf-8') as f:
+                json.dump(pin_data, f, indent=2, ensure_ascii=False)
+            
             created.append((filename, product["name"]))
-            drive_id = upload_pin_to_drive(service, filepath, filename)
-            uploaded.append((filename, product["name"], drive_id))
+            pins_data.append(pin_data)
+            
         except Exception as e:
             errors.append((product["name"], str(e)))
+    
+    # Generate summary
+    new_products = [p for p in pins_data if not p.get("procured", False)]
+    procured_products = [p for p in pins_data if p.get("procured", False)]
+    
+    summary_text = f"""Pinterest Pin Generator Report - {today.strftime('%B %d, %Y')}
 
-    # Output summary
-    print(f"Pinterest Pin Generator Report - {today.strftime('%B %d, %Y')}")
-    print(f"Source CSV: {file_info['name']}")
-    print()
-    print(f"Cleanup:")
-    print(f"  Old local pins deleted: {local_deleted}")
-    print(f"  Old Drive pins deleted: {drive_pins_deleted}")
-    print(f"  Old CSVs deleted: {old_csvs_deleted}")
-    print()
-    print(f"Created: {len(created)} pin files")
-    print(f"Uploaded to Drive: {len(uploaded)} files")
+📊 SUMMARY:
+• Total pins created: {len(pins_data)}
+• New products: {len(new_products)}
+• Already procured: {len(procured_products)}
+• Errors: {len(errors)}
+• Local storage: {PINS_DIR}
+
+🆕 NEW PRODUCTS ({len(new_products)}):"""
+    
+    for pin in new_products[:10]:  # Show first 10 new products
+        summary_text += f"\n  • {pin['product_name']} - {pin['price_range']} ({pin['category']})"
+    
+    if len(new_products) > 10:
+        summary_text += f"\n  ... and {len(new_products) - 10} more new products"
+    
+    if procured_products:
+        summary_text += f"\n\n✓ ALREADY PROCURED ({len(procured_products)}):"
+        for pin in procured_products[:5]:  # Show first 5 procured products
+            summary_text += f"\n  • {pin['product_name']} - {pin['price_range']}"
+        if len(procured_products) > 5:
+            summary_text += f"\n  ... and {len(procured_products) - 5} more procured products"
+    
     if errors:
-        print(f"Errors: {len(errors)}")
-        for name, err in errors:
-            print(f"  - {name}: {err}")
-    print()
-    if created:
-        print("Pins created:")
-        for filename, name in created:
-            has_img = "img" if any(p["name"] == name and (p["image_1"] or p["image_2"]) for p in new_products) else "no-img"
-            print(f"  {filename}: {name} [{has_img}]")
-    print()
-    print(f"Local: {PINS_DIR}")
-    print(f"Drive: PinterestAutomation/Pins/")
-
-    send_telegram(f"✅ Job 2 complete: {len(created)} pins created, {len(uploaded)} uploaded to Drive")
+        summary_text += f"\n\n❌ ERRORS ({len(errors)}):"
+        for product_name, error_msg in errors:
+            summary_text += f"\n  • {product_name}: {error_msg}"
+    
+    # Print summary to stdout
+    print("\n" + summary_text)
+    
+    # Send detailed email report
+    email_subject = f"Pinterest Pin Generator Report - {len(pins_data)} pins created ({len(new_products)} new)"
+    email_success = send_email_report(email_subject, summary_text, pins_data, errors)
+    
+    if email_success:
+        print(f"\n✅ Report complete: {len(pins_data)} pins created, detailed email sent")
+    else:
+        print(f"\n⚠️ Report complete: {len(pins_data)} pins created, but email failed")
 
 
 if __name__ == "__main__":

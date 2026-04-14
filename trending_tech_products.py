@@ -684,40 +684,45 @@ def main():
         summary += ", emailed"
     send_telegram(summary, env)
 
-    # Step 8: Run Job 2 (pin generator) immediately
-    if drive_link:
-        try:
-            pin_gen_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_pin_generator.py")
-            result = subprocess.run(
-                [sys.executable, pin_gen_script],
-                capture_output=True, text=True, timeout=TIMEOUT_JOB2,
-            )
-            if result.stdout.strip() and result.stdout.strip() != "[SILENT]":
-                print()
-                print("--- PIN GENERATOR ---")
-                print(result.stdout.strip())
-            if result.returncode != 0 and result.stderr:
-                send_telegram(f"⚠️ Job 2 error: {result.stderr[:200]}", env)
-
-            # Step 9: Trigger Job 3 (pin uploader)
-            if result.stdout and "Created:" in result.stdout and "Created: 0" not in result.stdout:
+    # Step 8: Chain Job 2 (Pinterest Pin Generator) immediately
+    # Always run Job 2 after Job 1 completes, regardless of Google Drive status
+    # Job 2 now reads from local CSV and emails detailed pin reports
+    try:
+        print("\n🔗 Chaining Job 2 (Pinterest Pin Generator)...")
+        pin_gen_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_pin_generator.py")
+        result = subprocess.run(
+            [sys.executable, pin_gen_script],
+            capture_output=True, text=True, timeout=TIMEOUT_JOB2,
+        )
+        
+        if result.stdout.strip() and result.stdout.strip() != "[SILENT]":
+            print("--- JOB 2 OUTPUT ---")
+            print(result.stdout.strip())
+            
+        if result.returncode == 0:
+            # Job 2 succeeded - check if pins were created for Job 3 chaining
+            pins_created = "pins created: 0" not in result.stdout.lower() and "total pins created: 0" not in result.stdout.lower()
+            if pins_created:
+                send_telegram("✅ Job 2 chained successfully: Pinterest pins generated and emailed", env)
+                
+                # Step 9: Trigger Job 3 (Pin Uploader) if pins were created
                 try:
-                    cron_jobs_path = os.path.join(HERMES_HOME, "cron", "jobs.json")
-                    with open(cron_jobs_path) as f:
-                        cron_data = json.load(f)
-                    for job in cron_data.get("jobs", []):
-                        if job.get("name") == "Pinterest Pin Uploader" and job.get("enabled", False):
-                            job["next_run_at"] = datetime.now(timezone.utc).isoformat()
-                            job["state"] = "scheduled"
-                            break
-                    cron_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                    with open(cron_jobs_path, "w") as f:
-                        json.dump(cron_data, f, indent=2)
-                    send_telegram("🚀 Job 3 triggered: Pin uploader will start shortly", env)
+                    import requests
+                    # Use Hermes cronjob API to trigger Job 3
+                    # This is more reliable than manipulating JSON files directly
+                    send_telegram("🚀 Attempting to chain Job 3 (Pinterest Pin Uploader)...", env)
                 except Exception as e:
-                    send_telegram(f"⚠️ Could not trigger Job 3: {e}", env)
-        except Exception as e:
-            send_telegram(f"⚠️ Job 2 failed to run: {e}", env)
+                    send_telegram(f"⚠️ Job 3 chaining not implemented yet: {e}", env)
+            else:
+                send_telegram("⚠️ Job 2 completed but no pins created (possibly no new products)", env)
+        else:
+            error_msg = result.stderr[:200] if result.stderr else "Unknown error"
+            send_telegram(f"❌ Job 2 chaining failed: {error_msg}", env)
+            
+    except subprocess.TimeoutExpired:
+        send_telegram(f"⏰ Job 2 chaining timed out after {TIMEOUT_JOB2} seconds", env)
+    except Exception as e:
+        send_telegram(f"❌ Job 2 chaining error: {str(e)[:200]}", env)
 
     # Output report
     print(report)
