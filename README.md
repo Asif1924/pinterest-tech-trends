@@ -22,9 +22,9 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 
 5. **Uploads** the CSV to Google Drive (PinterestAutomation folder)
 
-6. **Emails** the CSV to your inbox
+6. **Emails** the CSV to your inbox with procured products tracking (NEW vs ALREADY PROCURED)
 
-7. **Delivers** a formatted report to Telegram
+7. **Delivers** a formatted report to Telegram with procurement status indicators
 
 **Cost: $0 per run** — entirely Python, no AI tokens used
 
@@ -69,6 +69,7 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 ├── README.md                     This file
 ├── ARCHITECTURE.md               Step-by-step breakdown with AI vs non-AI
 ├── MIGRATION.md                  Transfer to another computer
+├── PROCURED_PRODUCTS_README.md  Documentation for procurement tracking
 ├── cron_job.json                 Job 1: scraper cron config
 ├── cron_job_pins.json            Job 2: pin generator cron config
 ├── cron_job_uploader.json        Job 3: pin uploader cron config
@@ -76,7 +77,9 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 ├── requirements.txt              Python dependencies
 ├── trending_tech_products.py     Scraper + image fetcher script
 ├── pinterest_pin_generator.py    Drive poller + pin file creator (100% Python)
-└── pinterest_pin_uploader.py     Pin data collector for uploader
+├── pinterest_pin_uploader.py     Pin data collector for uploader
+├── manage_procured.py            Helper script to track purchased products
+└── procured_products.json        List of already purchased products
 ```
 
 Remote: https://github.com/Asif1924/pinterest-tech-trends
@@ -137,6 +140,38 @@ Agent sends Telegram
 - Telegram bot configured in Hermes (for report delivery)
 - Google OAuth credentials with drive.file scope (for Drive uploads)
 - Pinterest account credentials (for pin uploads)
+
+## Features
+
+### 🆕 Procured Products Tracking
+
+The system now tracks which products you've already purchased to help avoid duplicates:
+
+- **Email Separation**: Clearly shows NEW vs ALREADY PROCURED products
+- **CSV Column**: Includes "Procured" column (Yes/No) for easy filtering
+- **Smart Matching**: Partial name matching catches product variations
+- **Priority Focus**: New products shown first in emails
+- **Visual Indicators**: 🆕 for new products, ✓ for procured in reports
+
+#### Managing Procured Products
+
+```bash
+cd ~/.hermes/scripts
+
+# Add a product you've purchased:
+python3 manage_procured.py add "Apple AirPods Pro"
+
+# View all procured products:
+python3 manage_procured.py list
+
+# Remove a product:
+python3 manage_procured.py remove "Apple AirPods Pro"
+
+# Clear all:
+python3 manage_procured.py clear
+```
+
+Products are stored in `procured_products.json`. The system uses case-insensitive partial matching, so "Apple AirPods" will match variations like "Apple AirPods Pro 2nd Gen".
 
 ### Deploy
 
