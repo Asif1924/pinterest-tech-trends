@@ -14,30 +14,15 @@ FEATURES:
 HOW TO MANAGE PROCURED PRODUCTS:
 ---------------------------------
 
-1. ADD A PRODUCT AS PROCURED:
-   cd ~/.hermes/scripts
-   python3 manage_procured.py add "Apple AirPods Pro"
-   python3 manage_procured.py add "Samsung Galaxy Watch 6"
-
-2. VIEW ALL PROCURED PRODUCTS:
-   python3 manage_procured.py list
-
-3. REMOVE A PRODUCT FROM PROCURED LIST:
-   python3 manage_procured.py remove "Apple AirPods Pro"
-
-4. CLEAR ALL PROCURED PRODUCTS:
-   python3 manage_procured.py clear
-
-5. EDIT MANUALLY (if needed):
-   Edit the file: ~/.hermes/scripts/procured_products.json
-   Format:
-   {
-     "procured": [
-       "Apple AirPods Pro",
-       "Samsung Galaxy Watch",
-       "Product Name Here"
-     ]
-   }
+Edit the file: ~/.hermes/scripts/procured_products.json
+Format:
+{
+  "procured": [
+    "Apple AirPods Pro",
+    "Samsung Galaxy Watch",
+    "Product Name Here"
+  ]
+}
 
 MATCHING LOGIC:
 ---------------
@@ -97,6 +82,5 @@ TIPS:
 FILES:
 ------
 - Script: ~/.hermes/scripts/trending_tech_products.py (main job)
-- Procured list: ~/.hermes/scripts/procured_products.json  
-- Manager: ~/.hermes/scripts/manage_procured.py
+- Procured list: ~/.hermes/scripts/procured_products.json
 - Config: ~/.hermes/scripts/pinterest_config.json

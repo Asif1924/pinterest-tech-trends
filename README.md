@@ -56,11 +56,9 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
    - Upload the CSV file
    - Review and publish
 
-5. **Status updates** via `mark_pins_uploaded.py` helper script after manual upload
+5. **Delivers** upload summary to Telegram
 
 **Benefits**: Faster uploads, better rate limiting, more reliable than individual browser automation
-
-5. **Delivers** upload summary to Telegram
 
 **Cost: ~$0.08 per run** — no AI creativity, just mechanical browser clicks. 5 pins per batch with rate limiting.
 
@@ -86,8 +84,6 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 ├── trending_tech_products.py     Scraper + image fetcher script
 ├── pinterest_pin_generator.py    Drive poller + pin file creator (100% Python)
 ├── pinterest_pin_uploader.py     CSV generator for Pinterest bulk upload
-├── mark_pins_uploaded.py         Helper script to mark pins as uploaded
-├── manage_procured.py            Helper script to track purchased products
 └── procured_products.json        List of already purchased products
 ```
 
@@ -164,23 +160,18 @@ The system now tracks which products you've already purchased to help avoid dupl
 
 #### Managing Procured Products
 
-```bash
-cd ~/.hermes/scripts
+Edit `procured_products.json` directly to add or remove products:
 
-# Add a product you've purchased:
-python3 manage_procured.py add "Apple AirPods Pro"
-
-# View all procured products:
-python3 manage_procured.py list
-
-# Remove a product:
-python3 manage_procured.py remove "Apple AirPods Pro"
-
-# Clear all:
-python3 manage_procured.py clear
+```json
+{
+  "procured": [
+    "Apple AirPods Pro",
+    "Samsung Galaxy Watch"
+  ]
+}
 ```
 
-Products are stored in `procured_products.json`. The system uses case-insensitive partial matching, so "Apple AirPods" will match variations like "Apple AirPods Pro 2nd Gen".
+The system uses case-insensitive partial matching, so "Apple AirPods" will match variations like "Apple AirPods Pro 2nd Gen".
 
 ### Deploy
 
