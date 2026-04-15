@@ -42,15 +42,23 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 
 **Cost: $0 per run** — entirely Python, no AI tokens used
 
-### Job 3: Pinterest Pin Uploader (1 hour after Job 2) — Mechanical browser automation
+### Job 3: Pinterest Pin Uploader (4x daily: 1, 7, 13, 19) — CSV Import Content
 
-1. **Scans** pending pin files (Python, free)
+1. **Scans** pending pin files and generates Pinterest-compatible CSV files
 
-2. **Logs into Pinterest** via browser automation
+2. **Creates CSV** with format: Media, Board, Title, Description, Link, Alt text
 
-3. **Uploads each pin** — fills title, description, alt text, affiliate link, image
+3. **Processes up to 20 pins** per batch for efficient bulk upload
 
-4. **Updates** pin file status to "uploaded" or "failed"
+4. **Sends email** with CSV file location and manual upload instructions:
+   - Go to https://business.pinterest.com/hub/
+   - Click "Create" → "Bulk create Pins"  
+   - Upload the CSV file
+   - Review and publish
+
+5. **Status updates** via `mark_pins_uploaded.py` helper script after manual upload
+
+**Benefits**: Faster uploads, better rate limiting, more reliable than individual browser automation
 
 5. **Delivers** upload summary to Telegram
 
@@ -77,7 +85,8 @@ Daily trending tech products scraper for the **SmartyPants9786** Pinterest board
 ├── requirements.txt              Python dependencies
 ├── trending_tech_products.py     Scraper + image fetcher script
 ├── pinterest_pin_generator.py    Drive poller + pin file creator (100% Python)
-├── pinterest_pin_uploader.py     Pin data collector for uploader
+├── pinterest_pin_uploader.py     CSV generator for Pinterest bulk upload
+├── mark_pins_uploaded.py         Helper script to mark pins as uploaded
 ├── manage_procured.py            Helper script to track purchased products
 └── procured_products.json        List of already purchased products
 ```
@@ -244,11 +253,10 @@ All Amazon links use the `allitechstore-20` associate tag. To change it, update 
 
 - Job 1 (Python): $0 — free, no AI tokens
 - Job 2 (Python): $0 — free, no AI tokens
-- Job 3 (mechanical browser): ~$0.08/run × 4/day = ~$10/month
-- **Total: ~$10/month**
+- Job 3 (CSV generator): $0/run × 4/day = ~$0/month
+- **Total: $0/month** — All jobs now run locally
 
-If Pinterest API access is approved or headless browser works on non-WSL,
-Job 3 becomes free too → **$0/month**.
+Job 3 now uses CSV import → **Already $0/month!**
 
 
 
