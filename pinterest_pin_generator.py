@@ -66,7 +66,7 @@ def _load_env_var(name):
     return ""
 
 
-def send_email_report(subject, body_text, pins_data, errors):
+def send_email_report(subject, body_text, pins_data, errors, csv_attachment_path=None):
     """Send detailed email report with pin summaries"""
     email_address = _load_env_var("EMAIL_ADDRESS")
     email_password = _load_env_var("EMAIL_PASSWORD")
@@ -145,7 +145,17 @@ def send_email_report(subject, body_text, pins_data, errors):
     # Attach both plain text and HTML versions
     msg.attach(MIMEText(body_text, 'plain'))
     msg.attach(MIMEText(html_body, 'html'))
-    
+
+    # Attach bulk upload CSV if provided
+    if csv_attachment_path and os.path.exists(csv_attachment_path):
+        with open(csv_attachment_path, 'rb') as f:
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition',
+                            f'attachment; filename={os.path.basename(csv_attachment_path)}')
+            msg.attach(part)
+
     # Send email
     try:
         smtp_config = CFG.get("smtp_defaults", {})
@@ -384,7 +394,7 @@ def main():
 
     # Send detailed email report
     email_subject = f"Pinterest Pin Generator Report - {len(pins_data)} pins created ({len(new_products)} new)"
-    email_success = send_email_report(email_subject, summary_text, pins_data, errors)
+    email_success = send_email_report(email_subject, summary_text, pins_data, errors, csv_attachment_path=csv_path)
     
     if email_success:
         print(f"\n✅ Report complete: {len(pins_data)} pins created, detailed email sent")
