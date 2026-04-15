@@ -262,6 +262,40 @@ def cleanup_old_pins_local():
     return deleted
 
 
+# ── Pinterest Bulk Upload CSV ───────────────────────────────────────────────
+
+def generate_pinterest_csv(pins_data, date_str):
+    """Generate a Pinterest-compatible CSV for bulk upload.
+    Pinterest Import Content format: Media, Board, Title, Description, Link, Alt text
+    """
+    csv_path = os.path.join(HERMES_HOME, f"pinterest_bulk_upload_{date_str}.csv")
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Media", "Board", "Title", "Description", "Link", "Alt text"])
+
+        for pin in pins_data:
+            image_url = pin.get("primary_image", "")
+            if not image_url and pin.get("images"):
+                image_url = pin["images"][0].get("url", "")
+
+            description = pin.get("description", "")
+            if len(description) > 500:
+                description = description[:497] + "..."
+
+            writer.writerow([
+                image_url,
+                pin.get("board", BOARD_NAME.lower()),
+                pin.get("title", ""),
+                description,
+                pin.get("link", ""),
+                pin.get("alt_text", ""),
+            ])
+
+    print(f"📄 Pinterest bulk upload CSV created: {csv_path} ({len(pins_data)} pins)")
+    return csv_path
+
+
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
@@ -339,9 +373,15 @@ def main():
         for product_name, error_msg in errors:
             summary_text += f"\n  • {product_name}: {error_msg}"
     
+    # Generate Pinterest bulk upload CSV
+    csv_path = None
+    if pins_data:
+        csv_path = generate_pinterest_csv(pins_data, date_str)
+        summary_text += f"\n\n📄 Pinterest CSV: {csv_path}"
+
     # Print summary to stdout
     print("\n" + summary_text)
-    
+
     # Send detailed email report
     email_subject = f"Pinterest Pin Generator Report - {len(pins_data)} pins created ({len(new_products)} new)"
     email_success = send_email_report(email_subject, summary_text, pins_data, errors)
