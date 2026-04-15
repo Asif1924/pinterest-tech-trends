@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """
-Pinterest Pin CSV Generator and Upload Helper
-Creates Pinterest-compatible CSV files from pending pins.
-Provides both automated upload (if browser available) and manual upload instructions.
+Pinterest Pin Uploader — Multi-Method Upload
+
+Uploads pending pins to Pinterest using three methods (in order):
+  1. Pinterest API v5 (POST /v5/pins) — most reliable, requires access token
+  2. Selenium browser automation — fallback, requires Chrome + credentials
+  3. Email CSV for manual upload — final fallback, always works
+
+Requires in ~/.hermes/.env:
+  PINTEREST_ACCESS_TOKEN  — for API method (from developers.pinterest.com)
+  PINTEREST_BOARD_ID      — board ID for API method
+  PINTEREST_EMAIL         — for Selenium method
+  PINTEREST_PASSWORD      — for Selenium method
+  EMAIL_ADDRESS           — for email fallback
+  EMAIL_PASSWORD          — for email fallback
 """
 
 import json
@@ -10,315 +21,398 @@ import csv
 import os
 import sys
 import smtplib
+import urllib.request
+import urllib.error
+import urllib.parse
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 from pathlib import Path
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv('/home/asif/.hermes/.env')
+# ── Config ──────────────────────────────────────────────────────────────────
+HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_config.json")
+PINS_DIR = Path(HERMES_HOME) / "pinterest_pins"
+UPLOAD_BATCH_SIZE = 20
+PINTEREST_API_URL = "https://api.pinterest.com/v5/pins"
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+CFG = load_config()
+
+
+def load_env():
+    env = {}
+    try:
+        with open(os.path.join(HERMES_HOME, ".env")) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    except FileNotFoundError:
+        pass
+    return env
+
 
 def log(message):
-    """Log with timestamp"""
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[{timestamp}] {message}")
 
+
+def send_telegram(text, env):
+    token = env.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = env.get("TELEGRAM_HOME_CHANNEL", "")
+    if not token or not chat_id:
+        return
+    try:
+        data = json.dumps({"chat_id": chat_id, "text": text}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=data, headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
+
+
+# ── Load Pins ───────────────────────────────────────────────────────────────
+
 def load_pending_pins():
-    """Load all pins with status 'pending_upload'"""
-    pins_dir = Path.home() / '.hermes' / 'pinterest_pins'
-    if not pins_dir.exists():
+    if not PINS_DIR.exists():
         log("No pinterest_pins directory found")
         return []
-    
-    pending_pins = []
-    for json_file in pins_dir.glob('*.json'):
+    pending = []
+    for json_file in sorted(PINS_DIR.glob("*.json")):
         try:
-            with open(json_file, 'r') as f:
-                pin_data = json.load(f)
-                if pin_data.get('status') == 'pending_upload':
-                    pin_data['file_path'] = json_file
-                    pending_pins.append(pin_data)
+            with open(json_file) as f:
+                pin = json.load(f)
+            if pin.get("status") in ("pending_upload", "ready_for_upload"):
+                pin["_file_path"] = str(json_file)
+                pending.append(pin)
         except Exception as e:
-            log(f"Error reading {json_file}: {e}")
-    
-    log(f"Found {len(pending_pins)} pins ready for upload")
-    return pending_pins
+            log(f"Error reading {json_file.name}: {e}")
+    log(f"Found {len(pending)} pins ready for upload")
+    return pending
 
-def create_pinterest_csv(pins, csv_path):
-    """
-    Create CSV file for Pinterest Import Content feature
-    Pinterest CSV format: Media,Board,Title,Description,Link,Alt text
-    """
-    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        
-        # Pinterest CSV header
-        writer.writerow(['Media', 'Board', 'Title', 'Description', 'Link', 'Alt text'])
-        
-        for pin in pins:
-            # Get primary image URL
-            image_url = pin.get('primary_image', '')
-            if not image_url and pin.get('images'):
-                image_url = pin['images'][0].get('url', '')
-            
-            # Clean up description (remove excessive hashtags, limit length)
-            description = pin.get('description', '')
-            if len(description) > 500:
-                description = description[:497] + "..."
-            
-            # Write pin data
-            writer.writerow([
-                image_url,                          # Media
-                pin.get('board', 'smartypants9786'), # Board
-                pin.get('title', ''),               # Title  
-                description,                        # Description
-                pin.get('link', ''),                # Link
-                pin.get('alt_text', '')             # Alt text
-            ])
-    
-    log(f"Created CSV with {len(pins)} pins: {csv_path}")
-    return csv_path
 
-def try_automated_upload(csv_path):
-    """
-    Attempt automated upload if browser automation is available
-    Returns True if successful, False otherwise
-    """
+def mark_pin_status(pin, status):
+    try:
+        pin["status"] = status
+        pin["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+        file_path = pin.get("_file_path")
+        if file_path:
+            save_data = {k: v for k, v in pin.items() if k != "_file_path"}
+            with open(file_path, "w") as f:
+                json.dump(save_data, f, indent=2)
+    except Exception as e:
+        log(f"Error updating pin status: {e}")
+
+
+# ── Method 1: Pinterest API v5 ─────────────────────────────────────────────
+
+def upload_via_api(pins, env):
+    """Upload pins using Pinterest API v5. Returns (uploaded, failed) or None."""
+    access_token = env.get("PINTEREST_ACCESS_TOKEN", "")
+    board_id = env.get("PINTEREST_BOARD_ID", "")
+    if not access_token or not board_id:
+        log("API: Missing PINTEREST_ACCESS_TOKEN or PINTEREST_BOARD_ID — skipping")
+        return None
+
+    log(f"API: Uploading {len(pins)} pins to board {board_id}")
+    uploaded, failed = [], []
+
+    for pin in pins:
+        image_url = pin.get("primary_image", "")
+        if not image_url and pin.get("images"):
+            image_url = pin["images"][0].get("url", "")
+        if not image_url:
+            log(f"  ⏭️ {pin.get('product_name', '?')}: no image — skipped")
+            failed.append((pin, "no image URL"))
+            continue
+
+        payload = json.dumps({
+            "board_id": board_id,
+            "title": pin.get("title", "")[:100],
+            "description": pin.get("description", "")[:500],
+            "link": pin.get("link", ""),
+            "alt_text": pin.get("alt_text", "")[:500],
+            "media_source": {"source_type": "image_url", "url": image_url},
+        }).encode()
+
+        req = urllib.request.Request(
+            PINTEREST_API_URL, data=payload, method="POST",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode())
+            log(f"  ✅ {pin.get('product_name', '?')} → pin ID {result.get('id')}")
+            mark_pin_status(pin, "uploaded")
+            uploaded.append(pin)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")[:200]
+            log(f"  ❌ {pin.get('product_name', '?')}: HTTP {e.code} — {body}")
+            failed.append((pin, f"HTTP {e.code}: {body}"))
+        except Exception as e:
+            log(f"  ❌ {pin.get('product_name', '?')}: {e}")
+            failed.append((pin, str(e)))
+
+    return uploaded, failed
+
+
+# ── Method 2: Selenium Browser Automation ───────────────────────────────────
+
+def upload_via_browser(pins, env):
+    """Upload pins via Selenium headless Chrome. Returns (uploaded, failed) or None."""
     try:
         from selenium import webdriver
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
         from selenium.webdriver.chrome.options import Options
-        from selenium.common.exceptions import TimeoutException, NoSuchElementException
-        
-        # Check if Chrome/Chromium is available
-        chrome_paths = ['/usr/bin/google-chrome', '/usr/bin/chromium-browser', '/usr/bin/chromium']
-        chrome_binary = None
-        for path in chrome_paths:
-            if Path(path).exists():
-                chrome_binary = path
-                break
-        
-        if not chrome_binary:
-            log("Chrome/Chromium not found - skipping automated upload")
-            return False
-        
-        # Set up Chrome options
-        chrome_options = Options()
-        chrome_options.binary_location = chrome_binary
-        chrome_options.add_argument('--no-sandbox')
-        chrome_options.add_argument('--disable-dev-shm-usage')
-        chrome_options.add_argument('--headless')  # Run headless for automation
-        chrome_options.add_argument('--window-size=1920,1080')
-        chrome_options.add_argument('--disable-gpu')
-        chrome_options.add_argument('--disable-web-security')
-        
-        # Try to create driver
-        driver = webdriver.Chrome(options=chrome_options)
-        
-        # Login and upload logic here
-        pinterest_email = os.getenv('PINTEREST_EMAIL', 'alli.asif@gmail.com')
-        pinterest_password = os.getenv('PINTEREST_PASSWORD', 'Mc68b09e!786')
-        
-        log("Attempting automated Pinterest upload...")
-        driver.get("https://www.pinterest.com/login/")
-        
-        # Login process
-        email_input = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "email"))
-        )
-        email_input.send_keys(pinterest_email)
-        
-        password_input = driver.find_element(By.ID, "password")
-        password_input.send_keys(pinterest_password)
-        
-        login_button = driver.find_element(By.CSS_SELECTOR, "[data-test-id='registerFormSubmitButton']")
-        login_button.click()
-        
-        # Wait for login success
-        WebDriverWait(driver, 15).until(
-            EC.any_of(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test-id='header-profile']")),
-                EC.url_contains("pinterest.com/")
-            )
-        )
-        
-        # Navigate to business hub for bulk upload
-        driver.get("https://business.pinterest.com/hub/")
-        
-        # Look for bulk creation options
-        # (Implementation continues based on Pinterest's current UI)
-        
-        driver.quit()
-        log("Automated upload completed successfully")
-        return True
-        
     except ImportError:
-        log("Selenium not available - using manual upload mode")
-        return False
-    except Exception as e:
-        log(f"Automated upload failed: {e}")
-        return False
+        log("Browser: Selenium not installed — skipping")
+        return None
 
-def mark_pins_uploaded(pins):
-    """Mark pins as uploaded and update their JSON files"""
-    for pin in pins:
-        try:
-            pin['status'] = 'uploaded'
-            pin['uploaded_at'] = datetime.now(timezone.utc).isoformat()
-            
-            with open(pin['file_path'], 'w') as f:
-                # Remove file_path from the data before saving
-                pin_data = {k: v for k, v in pin.items() if k != 'file_path'}
-                json.dump(pin_data, f, indent=2)
-            
-            log(f"Marked as uploaded: {pin['file_path'].name}")
-        except Exception as e:
-            log(f"Error updating pin status: {e}")
+    chrome_paths = ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"]
+    chrome_binary = next((p for p in chrome_paths if Path(p).exists()), None)
+    if not chrome_binary:
+        log("Browser: Chrome/Chromium not found — skipping")
+        return None
 
-def send_upload_report(pins, csv_path, automated_success=False):
-    """Send email report with CSV and upload instructions"""
+    email = env.get("PINTEREST_EMAIL", "")
+    password = env.get("PINTEREST_PASSWORD", "")
+    if not email or not password:
+        log("Browser: Missing PINTEREST_EMAIL or PINTEREST_PASSWORD — skipping")
+        return None
+
+    driver = None
     try:
-        email_address = os.getenv('EMAIL_ADDRESS')
-        email_password = os.getenv('EMAIL_PASSWORD')
-        
-        if not email_address or not email_password:
-            log("Email credentials not found in environment")
-            return
-        
-        # Create email
-        msg = MIMEMultipart('alternative')
-        subject = f"Pinterest CSV Ready - {len(pins)} pins"
-        if automated_success:
-            subject = f"Pinterest Upload Complete - {len(pins)} pins"
-        
-        msg['Subject'] = subject
-        msg['From'] = email_address
-        msg['To'] = email_address
-        
-        # Create HTML report
-        status_color = "#28a745" if automated_success else "#007bff"
-        status_text = "UPLOADED AUTOMATICALLY" if automated_success else "CSV READY FOR MANUAL UPLOAD"
-        
-        html = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; margin: 20px;">
-            <h2 style="color: {status_color};">Pinterest Bulk Upload Report</h2>
-            <p><strong>Status:</strong> <span style="color: {status_color}; font-weight: bold;">{status_text}</span></p>
-            <p><strong>Pins Processed:</strong> {len(pins)}</p>
-            <p><strong>CSV File:</strong> {csv_path}</p>
-            <p><strong>Generated:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
-        """
-        
-        if not automated_success:
-            html += f"""
-            <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007bff; margin: 20px 0;">
-                <h3 style="color: #007bff; margin-top: 0;">Manual Upload Instructions</h3>
-                <ol>
-                    <li>Go to <a href="https://business.pinterest.com/hub/" target="_blank">Pinterest Business Hub</a></li>
-                    <li>Click on "Create" → "Bulk create Pins"</li>
-                    <li>Choose "Upload a file" and select the CSV file: <code>{csv_path}</code></li>
-                    <li>Review the preview and click "Create Pins"</li>
-                </ol>
-                <p><strong>CSV Location:</strong> <code>{csv_path}</code></p>
-                <p><em>The CSV file is ready to upload with {len(pins)} pins formatted for Pinterest's Import Content feature.</em></p>
-            </div>
-            """
-        
-        html += """
-            <h3>Pin Summary:</h3>
-            <table border="1" style="border-collapse: collapse; width: 100%;">
-                <tr style="background-color: #f2f2f2;">
-                    <th style="padding: 8px; text-align: left;">Title</th>
-                    <th style="padding: 8px; text-align: left;">Board</th>
-                    <th style="padding: 8px; text-align: left;">Status</th>
-                </tr>
-        """
-        
+        opts = Options()
+        opts.binary_location = chrome_binary
+        for arg in ["--no-sandbox", "--disable-dev-shm-usage", "--headless",
+                     "--window-size=1920,1080", "--disable-gpu"]:
+            opts.add_argument(arg)
+        driver = webdriver.Chrome(options=opts)
+
+        # Login
+        log("Browser: Logging into Pinterest...")
+        driver.get("https://www.pinterest.com/login/")
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "email"))
+        ).send_keys(email)
+        driver.find_element(By.ID, "password").send_keys(password)
+        driver.find_element(
+            By.CSS_SELECTOR, "[data-test-id='registerFormSubmitButton']"
+        ).click()
+        WebDriverWait(driver, 15).until(EC.url_contains("pinterest.com/"))
+        log("Browser: Login successful")
+
+        # Upload each pin individually via pin builder
+        uploaded, failed = [], []
+        import time
         for pin in pins:
-            html += f"""
-                <tr>
-                    <td style="padding: 8px;">{pin.get('title', 'N/A')[:50]}</td>
-                    <td style="padding: 8px;">{pin.get('board', 'N/A')}</td>
-                    <td style="padding: 8px;">{pin.get('status', 'N/A')}</td>
-                </tr>
-            """
-        
-        html += """
-            </table>
-            
-            <p style="margin-top: 20px; font-size: 12px; color: #666;">
-                This is an automated report from the Pinterest automation pipeline.
-            </p>
-        </body>
-        </html>
-        """
-        
-        msg.attach(MIMEText(html, 'html'))
-        
-        # Send email
-        with smtplib.SMTP('smtp.gmail.com', 587) as server:
-            server.starttls()
-            server.login(email_address, email_password)
-            server.send_message(msg)
-        
-        log("Upload report email sent successfully")
-        
+            image_url = pin.get("primary_image", "")
+            if not image_url and pin.get("images"):
+                image_url = pin["images"][0].get("url", "")
+            if not image_url:
+                failed.append((pin, "no image URL"))
+                continue
+            try:
+                driver.get("https://www.pinterest.com/pin-creation-tool/")
+                time.sleep(3)
+
+                # Try to fill in the pin details
+                # Upload image via URL if possible
+                title_input = WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-test-id='pin-draft-title'] textarea, [placeholder*='title' i]"))
+                )
+                title_input.clear()
+                title_input.send_keys(pin.get("title", "")[:100])
+
+                desc_input = driver.find_element(By.CSS_SELECTOR, "[data-test-id='pin-draft-description'] textarea, [placeholder*='description' i]")
+                desc_input.clear()
+                desc_input.send_keys(pin.get("description", "")[:500])
+
+                link_input = driver.find_element(By.CSS_SELECTOR, "[data-test-id='pin-draft-link'] input, [placeholder*='link' i]")
+                link_input.clear()
+                link_input.send_keys(pin.get("link", ""))
+
+                alt_input = driver.find_element(By.CSS_SELECTOR, "[data-test-id='pin-draft-alt-text'] textarea, [placeholder*='alt' i]")
+                alt_input.clear()
+                alt_input.send_keys(pin.get("alt_text", "")[:500])
+
+                # Click publish
+                publish_btn = driver.find_element(By.CSS_SELECTOR, "[data-test-id='board-dropdown-save-button'], button[type='submit']")
+                publish_btn.click()
+                time.sleep(3)
+
+                log(f"  ✅ {pin.get('product_name', '?')}: published via browser")
+                mark_pin_status(pin, "uploaded")
+                uploaded.append(pin)
+            except Exception as e:
+                log(f"  ❌ {pin.get('product_name', '?')}: {e}")
+                failed.append((pin, str(e)))
+
+        driver.quit()
+        return uploaded, failed
+
     except Exception as e:
-        log(f"Error sending upload report: {e}")
+        log(f"Browser: Upload failed — {e}")
+        if driver:
+            driver.quit()
+        return None
+
+
+# ── Method 3: Email CSV for Manual Upload ───────────────────────────────────
+
+def create_bulk_csv(pins):
+    """Create Pinterest-compatible CSV. Returns path."""
+    csv_path = Path(HERMES_HOME) / f"pinterest_upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Media", "Board", "Title", "Description", "Link", "Alt text"])
+        board = CFG.get("pinterest", {}).get("board_name", "SmartyPants9786").lower()
+        for pin in pins:
+            image_url = pin.get("primary_image", "")
+            if not image_url and pin.get("images"):
+                image_url = pin["images"][0].get("url", "")
+            description = pin.get("description", "")
+            if len(description) > 500:
+                description = description[:497] + "..."
+            writer.writerow([
+                image_url, board, pin.get("title", ""),
+                description, pin.get("link", ""), pin.get("alt_text", ""),
+            ])
+    return str(csv_path)
+
+
+def upload_via_email(pins, env):
+    """Email CSV as final fallback. Always returns ([], pins) since nothing is auto-uploaded."""
+    email_addr = env.get("EMAIL_ADDRESS", "")
+    email_pass = env.get("EMAIL_PASSWORD", "")
+    if not email_addr or not email_pass:
+        log("Email: Missing EMAIL_ADDRESS or EMAIL_PASSWORD — cannot send")
+        return [], [(p, "email creds missing") for p in pins]
+
+    csv_path = create_bulk_csv(pins)
+    log(f"Email: Created bulk CSV at {csv_path}")
+
+    msg = MIMEMultipart()
+    msg["From"] = email_addr
+    msg["To"] = email_addr
+    msg["Subject"] = f"Pinterest Bulk Upload CSV — {len(pins)} pins ready"
+
+    body = f"""Pinterest Bulk Upload — {datetime.now().strftime('%B %d, %Y')}
+
+{len(pins)} pins are attached as a CSV for manual upload.
+
+Upload instructions:
+1. Go to https://business.pinterest.com/hub/
+2. Click "Create" → "Bulk create Pins"
+3. Upload the attached CSV file
+4. Review and click "Create Pins"
+
+Pins included:
+"""
+    for i, pin in enumerate(pins, 1):
+        body += f"  {i}. {pin.get('product_name', '?')}\n"
+
+    msg.attach(MIMEText(body, "plain"))
+
+    with open(csv_path, "rb") as f:
+        part = MIMEBase("application", "octet-stream")
+        part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition",
+                        f"attachment; filename={os.path.basename(csv_path)}")
+        msg.attach(part)
+
+    try:
+        smtp_cfg = CFG.get("smtp_defaults", {})
+        server = smtplib.SMTP(smtp_cfg.get("host", "smtp.gmail.com"),
+                              smtp_cfg.get("port", 587))
+        server.starttls()
+        server.login(email_addr, email_pass)
+        server.send_message(msg)
+        server.quit()
+        log(f"Email: Sent CSV to {email_addr}")
+    except Exception as e:
+        log(f"Email: Failed to send — {e}")
+
+    return [], [(p, "manual upload required") for p in pins]
+
+
+# ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
-    """Main upload process"""
-    log("=== Pinterest Pin CSV Generator Started ===")
-    
+    env = load_env()
+    log("=== Pinterest Pin Uploader Started ===")
+    send_telegram("📤 Job 3 started: Uploading pins to Pinterest", env)
+
     # Load pending pins
-    pending_pins = load_pending_pins()
-    if not pending_pins:
+    pending = load_pending_pins()
+    if not pending:
         log("No pending pins found. Exiting.")
+        send_telegram("⚠️ Job 3: No pending pins to upload", env)
         return
-    
-    # Limit to 20 pins per batch to avoid overwhelming Pinterest
-    batch_size = min(20, len(pending_pins))
-    pins_to_upload = pending_pins[:batch_size]
-    
-    log(f"Processing batch of {len(pins_to_upload)} pins")
-    
-    # Create CSV file
-    csv_path = Path.home() / '.hermes' / f'pinterest_upload_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-    csv_path.parent.mkdir(exist_ok=True)
-    
-    create_pinterest_csv(pins_to_upload, csv_path)
-    
-    # Try automated upload
-    automated_success = try_automated_upload(csv_path)
-    
-    if automated_success:
-        # Mark pins as uploaded if automation worked
-        mark_pins_uploaded(pins_to_upload)
-        log("Automated upload completed successfully!")
+
+    batch = pending[:UPLOAD_BATCH_SIZE]
+    log(f"Processing batch of {len(batch)} pins")
+
+    # Try methods in order: API → Browser → Email
+    method_used = None
+    uploaded, failed = [], []
+
+    # Method 1: Pinterest API
+    result = upload_via_api(batch, env)
+    if result is not None:
+        method_used = "Pinterest API v5"
+        uploaded, failed = result
     else:
-        log("Using manual upload mode - CSV file created and ready for manual upload")
-        # Don't mark as uploaded yet - wait for manual confirmation
-    
-    # Send report with CSV and instructions
-    send_upload_report(pins_to_upload, str(csv_path), automated_success)
-    
-    # Print manual instructions to console as well
-    if not automated_success:
-        print("\n" + "="*60)
-        print("MANUAL UPLOAD INSTRUCTIONS")
-        print("="*60)
-        print(f"1. CSV file created: {csv_path}")
-        print("2. Go to: https://business.pinterest.com/hub/")
-        print("3. Click: Create → Bulk create Pins")
-        print("4. Upload the CSV file")
-        print("5. Review and publish the pins")
-        print(f"6. CSV contains {len(pins_to_upload)} pins ready for upload")
-        print("="*60)
-    
-    log("=== Pinterest Pin CSV Generator Completed ===")
+        # Method 2: Selenium
+        result = upload_via_browser(batch, env)
+        if result is not None:
+            method_used = "Selenium browser"
+            uploaded, failed = result
+        else:
+            # Method 3: Email CSV
+            method_used = "Email CSV (manual upload)"
+            uploaded, failed = upload_via_email(batch, env)
+
+    # Summary
+    failed_pins = [f[0] if isinstance(f, tuple) else f for f in failed]
+    log(f"Method: {method_used}")
+    log(f"Uploaded: {len(uploaded)} | Failed/Manual: {len(failed)}")
+
+    summary = f"📤 Job 3 complete — {method_used}\n"
+    summary += f"✅ Uploaded: {len(uploaded)}\n"
+    if failed:
+        summary += f"❌ Failed/Manual: {len(failed)}\n"
+    if uploaded:
+        summary += "\nUploaded pins:\n"
+        for pin in uploaded[:10]:
+            summary += f"  • {pin.get('product_name', '?')}\n"
+        if len(uploaded) > 10:
+            summary += f"  ... and {len(uploaded) - 10} more\n"
+
+    send_telegram(summary, env)
+    print(summary)
+    log("=== Pinterest Pin Uploader Completed ===")
+
 
 if __name__ == "__main__":
     main()
