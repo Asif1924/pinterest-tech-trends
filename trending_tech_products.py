@@ -7,11 +7,10 @@ Complete pipeline in one script:
   2. Curates top 20 by Reddit score + product filtering
   3. Fetches 2 Amazon product images per product
   4. Generates CSV with all data
-  5. Uploads CSV to Google Drive
-  6. Emails CSV to inbox
-  7. Sends formatted Telegram report
-  8. Triggers Job 2 (pin generator) immediately
-  9. Triggers Job 3 (pin uploader)
+  5. Emails CSV report to inbox
+  6. Sends formatted Telegram report
+  7. Triggers Job 2 (pin generator) immediately
+  8. Triggers Job 3 (pin uploader)
 
 All settings in pinterest_config.json — no hardcoded values.
 Output: Plain text Telegram report to stdout.
@@ -669,26 +668,22 @@ def main():
     # Step 4: Generate CSV
     csv_path = generate_csv(products)
 
-    # Step 5: Upload to Google Drive
-    drive_link, drive_err = upload_csv_to_drive(csv_path, env)
-    if drive_err:
-        send_telegram(f"⚠️ Drive upload failed: {drive_err}", env)
-
-    # Step 6: Email CSV
-    email_err = email_csv(csv_path, products, drive_link, env)
+    # Step 5: Email CSV (no Google Drive upload)
+    email_err = email_csv(csv_path, products, None, env)  # No drive_link
     if email_err:
         send_telegram(f"⚠️ Email failed: {email_err}", env)
 
-    # Step 7: Summary
+    # Step 6: Send Telegram Summary
     report = format_telegram_report(products, today_str)
     summary = f"✅ Job 1 complete: {len(products)} products, {img_count} with images"
-    if drive_link:
-        summary += ", CSV on Drive"
     if not email_err:
-        summary += ", emailed"
+        summary += ", emailed report"
     send_telegram(summary, env)
+    
+    # Also send the detailed report to Telegram
+    send_telegram(report, env)
 
-    # Step 8: Chain Job 2 (Pinterest Pin Generator) immediately
+    # Step 7: Chain Job 2 (Pinterest Pin Generator) immediately
     # Job 2 will automatically chain Job 3 when it completes
     try:
         print("\n🔗 Chaining Job 2 (Pinterest Pin Generator)...")
