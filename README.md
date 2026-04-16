@@ -1,6 +1,6 @@
 # Pinterest Tech Trends
 
-Daily trending tech products scraper for the **SmartyPants9786** Pinterest board. Finds the top 20 trending electronics, gadgets, and tech products with Amazon Associates affiliate links, product images, and ready-to-post Pinterest pin files.
+Daily trending tech products scraper for the **SmartyPants2786** Pinterest board. Finds the top 20 trending electronics, gadgets, and tech products with Amazon Associates affiliate links, product images, and ready-to-post Pinterest pin files.
 
 ## What It Does
 

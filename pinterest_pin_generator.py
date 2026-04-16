@@ -38,7 +38,7 @@ def load_config():
 
 CFG = load_config()
 PINS_DIR = os.path.join(HERMES_HOME, "pinterest_pins")
-BOARD_NAME = CFG.get("pinterest", {}).get("board_name", "SmartyPants9786")
+BOARD_NAME = CFG.get("pinterest", {}).get("board_name", "SmartyPants2786")
 CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
 
 HASHTAGS = {

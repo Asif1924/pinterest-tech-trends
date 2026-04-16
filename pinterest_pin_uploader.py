@@ -32,7 +32,7 @@ from pathlib import Path
 # ── Config ──────────────────────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_config.json")
-BOARD_NAME = "SmartyPants9786"
+BOARD_NAME = "SmartyPants2786"
 
 
 def load_config():
