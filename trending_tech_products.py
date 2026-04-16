@@ -619,6 +619,8 @@ def main():
     today_str = today.strftime("%B %d, %Y")
     env = load_env()
 
+    send_telegram(f"🚀 Job 1 started at {today.strftime('%Y-%m-%d %H:%M:%S UTC')}", env)
+
     strategy = CFG.get("link_strategy", 1)
     strategy_name = CFG.get("link_strategies", {}).get(str(strategy), {}).get("name", f"Strategy {strategy}")
     send_telegram(f"🔍 Job 1 started: Scraping trending tech products ({today.strftime('%Y-%m-%d')})\nAffiliate links: {strategy_name}", env)
@@ -641,6 +643,7 @@ def main():
 
     if not products:
         send_telegram("⚠️ Job 1: No products found from any source", env)
+        send_telegram(f"🏁 Job 1 ended at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}", env)
         print("No products found.")
         return
 
@@ -714,6 +717,8 @@ def main():
         send_telegram(f"⏰ Job 2 chaining timed out after {TIMEOUT_JOB2} seconds", env)
     except Exception as e:
         send_telegram(f"❌ Job 2 chaining error: {str(e)[:200]}", env)
+
+    send_telegram(f"🏁 Job 1 ended at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}", env)
 
     # Output report
     print(report)
