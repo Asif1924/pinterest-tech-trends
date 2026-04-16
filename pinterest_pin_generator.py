@@ -283,7 +283,7 @@ def generate_pinterest_csv(pins_data, date_str):
 
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Media", "Board", "Title", "Description", "Link", "Alt text"])
+        writer.writerow(["Title", "Media URL", "Pinterest board", "Description", "Link", "Keywords"])
 
         for pin in pins_data:
             image_url = pin.get("primary_image", "")
@@ -295,12 +295,12 @@ def generate_pinterest_csv(pins_data, date_str):
                 description = description[:497] + "..."
 
             writer.writerow([
-                image_url,
-                pin.get("board", BOARD_NAME.lower()),
-                pin.get("title", ""),
-                description,
-                pin.get("link", ""),
-                pin.get("alt_text", ""),
+                pin.get('title', '')[:100],  # Title (limit to 100 chars)
+                image_url,  # Media URL
+                BOARD_NAME,  # Pinterest board
+                description,  # Description
+                pin.get('link', ''),  # Link
+                pin.get('alt_text', pin.get('title', ''))[:500]  # Keywords
             ])
 
     print(f"📄 Pinterest bulk upload CSV created: {csv_path} ({len(pins_data)} pins)")
