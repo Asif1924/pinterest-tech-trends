@@ -226,11 +226,16 @@ def create_pin_json(product, date_str):
     image_2 = product["image_2"]
     procured = product.get("procured", False)
 
+    AFFILIATE_DISCLOSURE = "\n\n#affiliate #ad  (This pin contains affiliate links — I earn a commission if you purchase through my link)"
     category_tags = HASHTAGS.get(category, "#TechGadgets #Innovation")
     pin_description = caption if caption else f"{name} - {description}"
     if category_tags not in pin_description:
         pin_description = f"{pin_description} {category_tags}"
-    pin_description = pin_description[:500]
+    # Truncate description to leave room for affiliate disclosure within 500 chars
+    max_desc_len = 500 - len(AFFILIATE_DISCLOSURE)
+    if len(pin_description) > max_desc_len:
+        pin_description = pin_description[:max_desc_len - 3] + "..."
+    pin_description = f"{pin_description}{AFFILIATE_DISCLOSURE}"
     
     title = f"{name} - {price}" if price else name
     title = title[:100]
