@@ -189,8 +189,19 @@ def upload_via_browser_import(csv_path, pins, env):
         from selenium.webdriver.chrome.options import Options
         from selenium.webdriver.common.keys import Keys
         
-        # Check for Chrome/Chromium
-        chrome_paths = ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"]
+        # Check for Chrome/Chromium (Linux native + Windows Chrome via WSL)
+        chrome_paths = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/mnt/c/Program Files/Google/Chrome/Application/chrome.exe",
+        ]
+        # Also check user-specific Windows Chrome path
+        import glob
+        user_chrome = glob.glob("/mnt/c/Users/*/AppData/Local/Google/Chrome/Application/chrome.exe")
+        if user_chrome:
+            chrome_paths.append(user_chrome[0])
+        
         chrome_binary = next((p for p in chrome_paths if Path(p).exists()), None)
         
         if chrome_binary:
@@ -221,8 +232,27 @@ def upload_via_browser_import(csv_path, pins, env):
             # Run in headful mode for file upload to work properly
             # opts.add_argument("--headless")
             
-            log("Starting Chrome browser...")
-            driver = webdriver.Chrome(options=opts)
+            # Use webdriver-manager for automatic ChromeDriver management
+            is_windows_chrome = chrome_binary.endswith(".exe")
+            if is_windows_chrome:
+                log(f"Windows Chrome detected: {chrome_binary}")
+                log("Using webdriver-manager to locate ChromeDriver...")
+                from webdriver_manager.chrome import ChromeDriverManager
+                from webdriver_manager.core.os import get_os_name
+                from selenium.webdriver.chrome.service import Service
+                
+                # Download/manage ChromeDriver
+                driver_path = ChromeDriverManager().install()
+                log(f"ChromeDriver ready at: {driver_path}")
+                
+                # Set up service for Windows Chrome
+                service = Service(executable_path=driver_path)
+                
+                log("Starting Windows Chrome via WSL...")
+                driver = webdriver.Chrome(service=service, options=opts)
+            else:
+                log("Starting Linux Chrome...")
+                driver = webdriver.Chrome(options=opts)
             
             # Login to Pinterest
             log("Navigating to Pinterest login...")

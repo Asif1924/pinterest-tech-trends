@@ -685,8 +685,7 @@ def main():
     send_telegram(summary, env)
 
     # Step 8: Chain Job 2 (Pinterest Pin Generator) immediately
-    # Always run Job 2 after Job 1 completes, regardless of Google Drive status
-    # Job 2 now reads from local CSV and emails detailed pin reports
+    # Job 2 will automatically chain Job 3 when it completes
     try:
         print("\n🔗 Chaining Job 2 (Pinterest Pin Generator)...")
         pin_gen_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_pin_generator.py")
@@ -698,21 +697,12 @@ def main():
         if result.stdout.strip() and result.stdout.strip() != "[SILENT]":
             print("--- JOB 2 OUTPUT ---")
             print(result.stdout.strip())
-            
+        
         if result.returncode == 0:
-            # Job 2 succeeded - check if pins were created for Job 3 chaining
+            # Job 2 succeeded - it will chain Job 3 automatically
             pins_created = "pins created: 0" not in result.stdout.lower() and "total pins created: 0" not in result.stdout.lower()
             if pins_created:
-                send_telegram("✅ Job 2 chained successfully: Pinterest pins generated and emailed", env)
-                
-                # Step 9: Trigger Job 3 (Pin Uploader) if pins were created
-                try:
-                    import requests
-                    # Use Hermes cronjob API to trigger Job 3
-                    # This is more reliable than manipulating JSON files directly
-                    send_telegram("🚀 Attempting to chain Job 3 (Pinterest Pin Uploader)...", env)
-                except Exception as e:
-                    send_telegram(f"⚠️ Job 3 chaining not implemented yet: {e}", env)
+                send_telegram("✅ Job 2 chained successfully: Pinterest pins generated and emailed (Job 3 will upload automatically)", env)
             else:
                 send_telegram("⚠️ Job 2 completed but no pins created (possibly no new products)", env)
         else:
