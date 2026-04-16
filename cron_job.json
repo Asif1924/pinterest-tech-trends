@@ -1,6 +1,6 @@
 {
   "name": "Trending Tech Products for Pinterest",
-  "schedule": "0 */6 * * *",
+  "schedule": "0 * * * *",
   "script": "trending_tech_products.py",
   "deliver": "telegram",
   "prompt": "The script output above is the complete report. Just relay it as-is to Telegram. Do not add anything or make any tool calls. Simply repeat the script output as your response."
