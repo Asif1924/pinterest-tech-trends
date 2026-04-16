@@ -568,8 +568,9 @@ def email_csv(csv_path, products, drive_link, env):
         part = MIMEBase("application", "octet-stream")
         part.set_payload(f.read())
         encoders.encode_base64(part)
+        file_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         part.add_header("Content-Disposition",
-                        f"attachment; filename=trending_tech_products_{today}.csv")
+                        f"attachment; filename=trending_tech_products_{file_timestamp}.csv")
         msg.attach(part)
 
     try:
