@@ -212,6 +212,73 @@ def load_csv_data():
         return []
 
 
+# ── Image Fetching ──────────────────────────────────────────────────────────
+
+def fetch_amazon_product_images(product_name, amazon_link, num_images=2):
+    """Fetch product images from Amazon link.
+    
+    Falls back to search if direct link doesn't return images.
+    """
+    import urllib.request
+    import re
+    
+    images = []
+    
+    # Try direct product page first
+    if amazon_link and "/dp/" in amazon_link:
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            req = urllib.request.Request(amazon_link, headers=headers)
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                html = resp.read().decode('utf-8', errors='ignore')
+                
+                # Extract image URLs from various patterns
+                patterns = [
+                    r'"imageGalleryData":\s*\[?\s*\{"initial":\s*"([^"]+)"',
+                    r'"landingImage":\s*"([^"]+)"',
+                    r'"hiRes":\s*"([^"]+)"',
+                    r'data-a-dynamic-image=\'([^\']+)\'',
+                    r'src="(https://m\.media-amazon\.com/images/I/[^"]+)"',
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, html)
+                    for match in matches:
+                        url = match if isinstance(match, str) else match[0]
+                        if url.startswith('http') and '/images/I/' in url:
+                            images.append(url)
+                            if len(images) >= num_images:
+                                return images
+        except Exception:
+            pass
+    
+    # Fallback: search Amazon for product images
+    if len(images) < num_images:
+        try:
+            import urllib.parse
+            query = urllib.parse.quote_plus(product_name)
+            search_url = f"https://www.amazon.com/s?k={query}"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            req = urllib.request.Request(search_url, headers=headers)
+            
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                html = resp.read().decode('utf-8', errors='ignore')
+                
+                # Extract image URLs from search results
+                pattern = r'src="(https://m\.media-amazon\.com/images/I/[^"\.]+\._[^"]*\.jpg)"'
+                matches = re.findall(pattern, html)
+                
+                for match in matches:
+                    if match not in images:
+                        images.append(match)
+                        if len(images) >= num_images:
+                            break
+        except Exception:
+            pass
+    
+    return images[:num_images]
+
+
 # ── Pin Creation ────────────────────────────────────────────────────────────
 
 def create_pin_json(product, date_str):
@@ -225,6 +292,13 @@ def create_pin_json(product, date_str):
     image_1 = product["image_1"]
     image_2 = product["image_2"]
     procured = product.get("procured", False)
+
+    # Fetch images if not provided by Job 1
+    if not image_1 and not image_2:
+        fetched_imgs = fetch_amazon_product_images(name, link, num_images=2)
+        if fetched_imgs:
+            image_1 = fetched_imgs[0] if len(fetched_imgs) > 0 else ""
+            image_2 = fetched_imgs[1] if len(fetched_imgs) > 1 else ""
 
     AFFILIATE_DISCLOSURE = "\n\n#affiliate #ad  (This pin contains affiliate links — I earn a commission if you purchase through my link)"
     category_tags = HASHTAGS.get(category, "#TechGadgets #Innovation")

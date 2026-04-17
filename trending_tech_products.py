@@ -917,9 +917,11 @@ def main():
         else:
             p["link"] = affiliate_link_strategy_1(p["name"])
     
-    # Fetch images (wall-clock deadline; see fetch_images_for_products)
-    print("  Fetching product images...")
-    products = fetch_images_for_products(products, start_time=start_time, budget_seconds=20)
+    # Skip image fetching in Job 1 — it's too slow with Firecrawl LLM extract.
+    # Job 2 will fetch images on-demand during pin generation.
+    print(\"  Skipping image fetch (will be handled by Job 2)...\")
+    for p in products:
+        p[\"images\"] = []
 
     # LLM enrichment — fills Category/Description/Why Trending/Price Range/Pin Caption
     products = llm_enrich_products(products, start_time=start_time)
