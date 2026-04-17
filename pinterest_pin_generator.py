@@ -407,26 +407,34 @@ def main():
     else:
         print(f"\n⚠️ Report complete: {len(pins_data)} pins created, but email failed")
     
-    # Chain Job 3 (Pinterest Pin Uploader) immediately after Job 2 completes
+    # Chain Job 3 (Pinterest Pin Uploader) immediately after Job 2 completes.
+    # Inherits env + cwd so the uploader has access to Pinterest creds and
+    # relative paths (selenium drivers, CSV output dir, etc.).
     if pins_data:
         try:
             print("\n🔗 Chaining Job 3 (Pinterest Pin Uploader)...")
-            uploader_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pinterest_pin_uploader.py")
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            uploader_script = os.path.join(script_dir, "pinterest_pin_uploader.py")
             result = subprocess.run(
                 [sys.executable, uploader_script],
                 capture_output=True, text=True, timeout=300,  # 5 minute timeout
+                env=os.environ.copy(),
+                cwd=script_dir,
             )
-            
-            if result.stdout.strip():
-                print("--- JOB 3 OUTPUT ---")
-                print(result.stdout.strip())
-            
+
+            if result.stdout:
+                print("--- JOB 3 STDOUT ---")
+                print(result.stdout.rstrip())
+            if result.stderr:
+                print("--- JOB 3 STDERR ---")
+                print(result.stderr.rstrip())
+
             if result.returncode == 0:
                 print("\n✅ Job 3 chained successfully: Pinterest pins uploaded")
             else:
-                error_msg = result.stderr[:200] if result.stderr else "Unknown error"
-                print(f"\n⚠️ Job 3 completed with warnings: {error_msg}")
-                
+                tail = (result.stderr or result.stdout or "Unknown error")[-400:]
+                print(f"\n⚠️ Job 3 exit code {result.returncode}: {tail}")
+
         except subprocess.TimeoutExpired:
             print(f"\n⏰ Job 3 chaining timed out after 300 seconds")
         except Exception as e:

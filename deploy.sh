@@ -68,6 +68,11 @@ else
         cp "$SCRIPT_DIR/pinterest_pin_uploader.py" "$HERMES_SCRIPTS/pinterest_pin_uploader.py"
         echo "   ✓ Copied to $HERMES_SCRIPTS/pinterest_pin_uploader.py"
     fi
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+        cp "$SCRIPT_DIR/.env" "$HERMES_SCRIPTS/.env"
+        chmod 600 "$HERMES_SCRIPTS/.env"
+        echo "   ✓ Copied .env (secrets) to $HERMES_SCRIPTS/.env"
+    fi
 fi
 
 # --- Step 2: Create / update the venv ---
