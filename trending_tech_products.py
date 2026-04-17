@@ -49,27 +49,6 @@ def load_config():
 
 CFG = load_config()
 
-# Firecrawl setup
-FIRECRAWL_CONFIG = CFG.get("firecrawl", {})
-FIRECRAWL_API_KEY = FIRECRAWL_CONFIG.get("api_key", "")
-FIRECRAWL_ENABLED = FIRECRAWL_CONFIG.get("enabled", False) and FIRECRAWL_API_KEY
-
-# Initialize hybrid scraper
-scraper = FirecrawlHybridClient(api_key=FIRECRAWL_API_KEY if FIRECRAWL_ENABLED else None)
-
-# Existing config
-TOP_N = CFG.get("top_n_products", 20)
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-TIMEOUT_HTTP = CFG.get("timeouts", {}).get("http_request", 15)
-TIMEOUT_TELEGRAM = CFG.get("timeouts", {}).get("telegram_api", 10)
-TIMEOUT_IMAGE = CFG.get("timeouts", {}).get("image_scrape", 15)
-TIMEOUT_JOB2 = CFG.get("timeouts", {}).get("job2_subprocess", 120)
-CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
-
-# Links
-LINK_STRATEGY = CFG.get("link_strategy", 2)
-AFFILIATE_TAG = CFG.get("affiliate_tag", "allitechstore-20")
-
 
 # ── Environment ─────────────────────────────────────────────────────────────
 def load_env():
@@ -87,6 +66,27 @@ def load_env():
 
 
 ENV = load_env()
+
+# Firecrawl setup (API key loaded from .env, not config.json)
+FIRECRAWL_CONFIG = CFG.get("firecrawl", {})
+FIRECRAWL_API_KEY = ENV.get("FIRECRAWL_API_KEY", "")
+FIRECRAWL_ENABLED = FIRECRAWL_CONFIG.get("enabled", False) and FIRECRAWL_API_KEY
+
+# Initialize hybrid scraper
+scraper = FirecrawlHybridClient(api_key=FIRECRAWL_API_KEY if FIRECRAWL_ENABLED else None)
+
+# Existing config
+TOP_N = CFG.get("top_n_products", 20)
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+TIMEOUT_HTTP = CFG.get("timeouts", {}).get("http_request", 15)
+TIMEOUT_TELEGRAM = CFG.get("timeouts", {}).get("telegram_api", 10)
+TIMEOUT_IMAGE = CFG.get("timeouts", {}).get("image_scrape", 15)
+TIMEOUT_JOB2 = CFG.get("timeouts", {}).get("job2_subprocess", 120)
+CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
+
+# Links
+LINK_STRATEGY = CFG.get("link_strategy", 2)
+AFFILIATE_TAG = CFG.get("affiliate_tag", "allitechstore-20")
 
 
 # ── Telegram Notifications ──────────────────────────────────────────────────
