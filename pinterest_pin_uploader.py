@@ -534,6 +534,14 @@ def main():
         body_html = create_success_html(pin_count, csv_path)
         send_email_report(subject, body_html, csv_path, env)
         
+        # Delete CSV file after successful upload and email
+        try:
+            os.remove(csv_path)
+            log(f"Deleted CSV file: {csv_path}")
+            send_telegram(f"🗑️ Cleaned up CSV file after successful upload", env)
+        except Exception as e:
+            log(f"Warning: Could not delete CSV file: {e}")
+        
         # Enhanced completion message
         send_telegram(f"🎉 Job 3 COMPLETE: {pin_count} pins successfully uploaded to Pinterest via automation!", env)
     else:
@@ -543,16 +551,24 @@ def main():
         subject = f"📌 Pinterest Bulk Upload Ready - {pin_count} pins"
         body_html = create_manual_instructions_html(csv_path, pin_count)
         send_email_report(subject, body_html, csv_path, env)
+        
+        # Delete CSV file after emailing it
+        try:
+            os.remove(csv_path)
+            log(f"Deleted CSV file after emailing: {csv_path}")
+            deletion_note = "\\n\\n⚠️ Note: CSV file has been deleted after emailing. Use the email attachment for manual upload."
+        except Exception as e:
+            log(f"Warning: Could not delete CSV file: {e}")
+            deletion_note = f"\\n\\n📂 CSV file location: {csv_path}"
 
         telegram_msg = f"""📌 Job 3: Manual Upload Required
 
-CSV file with {pin_count} pins ready for manual upload.
-Location: {csv_path}
+CSV file with {pin_count} pins ready for manual upload.{deletion_note}
 
 Manual upload steps:
 1. Go to https://www.pinterest.com/settings/import
 2. Click 'Import content'
-3. Upload the CSV file
+3. Upload the CSV file from your email
 4. Click 'Create Pins'
 
 📧 Check your email for detailed instructions and CSV attachment."""
