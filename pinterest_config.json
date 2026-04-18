@@ -4,12 +4,12 @@
   "link_strategies": {
     "1": {
       "name": "Search Links",
-      "description": "Uses Amazon search URL (/s?k=product+name). Always works, never breaks. User lands on search results page — extra click to reach product.",
+      "description": "Uses Amazon search URL (/s?k=product+name). Always works, never breaks. User lands on search results page \u2014 extra click to reach product.",
       "example": "https://www.amazon.com/s?k=Dyson+Handheld+Fan&tag=allitechstore-20"
     },
     "2": {
       "name": "Direct Product Links",
-      "description": "Scrapes the actual ASIN from Amazon search results and builds a direct product link (/dp/ASIN). User lands directly on product page — higher conversion rate. May occasionally break if ASIN is delisted.",
+      "description": "Scrapes the actual ASIN from Amazon search results and builds a direct product link (/dp/ASIN). User lands directly on product page \u2014 higher conversion rate. May occasionally break if ASIN is delisted.",
       "example": "https://www.amazon.com/dp/B0C1SRTW9F?tag=allitechstore-20"
     }
   },
@@ -29,14 +29,53 @@
     "http_request": 15,
     "telegram_api": 10,
     "image_scrape": 15,
-    "job2_subprocess": 120
+    "image_fetch_deadline": 180,
+    "job1_deadline": 480,
+    "job2_subprocess": 480,
+    "scrape_budget": 180
+  },
+  "scraping": {
+    "reddit_max_age_hours": 48,
+    "amazon": {
+      "categories": [
+        "electronics", "computers", "wireless", "pc", "photo",
+        "hpc", "kitchen", "home-garden", "toys-and-games", "officeproduct",
+        "videogames", "hi"
+      ],
+      "list_types": [
+        ["movers-and-shakers", "movers"],
+        ["new-releases", "new"],
+        ["zgbs", "bestsellers"]
+      ],
+      "per_source_limit": 12,
+      "budget_seconds": 110
+    }
+  },
+  "scoring": {
+    "source_weights": {
+      "amazon_movers":      2.5,
+      "amazon_new":         1.8,
+      "amazon_bestsellers": 1.5,
+      "amazon":             1.2,
+      "producthunt":        1.3,
+      "theverge":           0.9,
+      "techradar":          0.9,
+      "google":             0.7,
+      "reddit":             0.6
+    }
+  },
+  "llm": {
+    "enabled": true,
+    "base_url": "http://192.168.1.7:1234/v1",
+    "model": "zai-org/glm-4.7-flash",
+    "timeout_seconds": 150,
+    "api_key": "lm-studio"
+  },
+  "firecrawl": {
+    "enabled": true
   },
   "smtp_defaults": {
     "host": "smtp.gmail.com",
     "port": 587
-  },
-  "firecrawl": {
-    "enabled": true,
-    "prefer_for_js_sites": true
   }
 }
