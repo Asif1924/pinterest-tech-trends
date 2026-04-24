@@ -357,6 +357,7 @@ def cleanup_old_pins_local():
 def generate_pinterest_csv(pins_data, date_str):
     """Generate a Pinterest-compatible CSV for bulk upload.
     Pinterest Import Content format: Media, Board, Title, Description, Link, Alt text
+    Excludes any pins without a media URL.
     """
     csv_path = os.path.join(HERMES_HOME, f"pinterest_bulk_upload_{date_str}.csv")
 
@@ -364,10 +365,19 @@ def generate_pinterest_csv(pins_data, date_str):
         writer = csv.writer(f)
         writer.writerow(["Title", "Media URL", "Pinterest board", "Description", "Link", "Keywords"])
 
+        valid_pins = 0
+        excluded_pins = 0
+        
         for pin in pins_data:
             image_url = pin.get("primary_image", "")
             if not image_url and pin.get("images"):
                 image_url = pin["images"][0].get("url", "")
+
+            # Skip pins without a media URL
+            if not image_url:
+                excluded_pins += 1
+                print(f"⚠️  Excluding pin '{pin.get('title', 'Unknown')}' - no media URL")
+                continue
 
             description = pin.get("description", "")
             if len(description) > 500:
@@ -381,8 +391,9 @@ def generate_pinterest_csv(pins_data, date_str):
                 pin.get('link', ''),  # Link
                 pin.get('alt_text', pin.get('title', ''))[:500]  # Keywords
             ])
+            valid_pins += 1
 
-    print(f"📄 Pinterest bulk upload CSV created: {csv_path} ({len(pins_data)} pins)")
+    print(f"📄 Pinterest bulk upload CSV created: {csv_path} ({valid_pins} valid pins, {excluded_pins} excluded due to missing media URL)")
     return csv_path
 
 
