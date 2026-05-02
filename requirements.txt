@@ -9,3 +9,7 @@
 #   beautifulsoup4>=4.12  # better HTML parsing
 #   feedparser>=6.0       # RSS/Atom feed parsing
 #   praw>=7.7             # Reddit API (instead of scraping JSON)
+
+# Pinterest pin uploader (Job 3) — browser automation
+undetected-chromedriver>=3.5.5
+playwright>=1.58              # bundled Chromium (preferred in WSL headless)

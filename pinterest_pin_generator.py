@@ -367,7 +367,7 @@ def generate_pinterest_csv(pins_data, date_str):
 
         valid_pins = 0
         excluded_pins = 0
-        
+
         for pin in pins_data:
             image_url = pin.get("primary_image", "")
             if not image_url and pin.get("images"):
@@ -394,6 +394,18 @@ def generate_pinterest_csv(pins_data, date_str):
             valid_pins += 1
 
     print(f"📄 Pinterest bulk upload CSV created: {csv_path} ({valid_pins} valid pins, {excluded_pins} excluded due to missing media URL)")
+
+    # Archive copy to ~/.hermes/pinterest_csv/ for history (so Job 3 deletion doesn't lose it)
+    try:
+        import shutil
+        archive_dir = os.path.join(HERMES_HOME, "pinterest_csv")
+        os.makedirs(archive_dir, exist_ok=True)
+        archive_path = os.path.join(archive_dir, f"pinterest_upload_{date_str}.csv")
+        shutil.copy2(csv_path, archive_path)
+        print(f"📁 Archived to: {archive_path}")
+    except Exception as e:
+        print(f"⚠️ Archive save failed: {e}")
+
     return csv_path
 
 

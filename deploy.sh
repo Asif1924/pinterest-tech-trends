@@ -87,6 +87,12 @@ if [[ -f "$SCRIPT_DIR/requirements.txt" ]]; then
     fi
 fi
 
+# Detect whether playwright is a listed dependency (drives Chromium install below)
+HAS_PLAYWRIGHT=false
+if [[ "$HAS_DEPS" == true ]] && grep -qE '^[[:space:]]*playwright([[:space:]<>=!~]|$)' "$SCRIPT_DIR/requirements.txt" 2>/dev/null; then
+    HAS_PLAYWRIGHT=true
+fi
+
 if [[ "$DRY_RUN" == true ]]; then
     if [[ ! -d "$VENV_DIR" ]]; then
         echo "   [would create] venv at $VENV_DIR"
@@ -97,6 +103,9 @@ if [[ "$DRY_RUN" == true ]]; then
         echo "   [would install] packages from requirements.txt"
     else
         echo "   [no packages] requirements.txt is empty (stdlib only)"
+    fi
+    if [[ "$HAS_PLAYWRIGHT" == true ]]; then
+        echo "   [would install] Playwright Chromium browser"
     fi
 else
     # Create venv if it doesn't exist
@@ -127,6 +136,18 @@ else
         echo "   ✓ Packages installed"
     else
         echo "   ✓ No packages to install (stdlib only)"
+    fi
+
+    # Install Playwright's Chromium browser if playwright is a listed dep.
+    # Idempotent: playwright skips download if the browser is already present.
+    # Non-fatal: network blips shouldn't break the whole deploy.
+    if [[ "$HAS_PLAYWRIGHT" == true ]]; then
+        echo "   Ensuring Playwright Chromium is installed..."
+        if "$VENV_DIR/bin/python3" -m playwright install chromium >/dev/null 2>&1; then
+            echo "   ✓ Playwright Chromium ready"
+        else
+            echo "   ⚠ Playwright Chromium install failed (continuing; uploader will fall back to system Chrome)"
+        fi
     fi
 
     # Show venv Python info
