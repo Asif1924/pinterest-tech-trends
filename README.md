@@ -2,6 +2,8 @@
 
 Daily trending tech products scraper for the **SmartyPants2786** Pinterest board. Finds the top 20 trending electronics, gadgets, and tech products with Amazon Associates affiliate links, product images, and ready-to-post Pinterest pin files.
 
+> **🚀 New to this repo?** See [**SETUP.md**](SETUP.md) for complete fresh installation instructions on a new machine. Takes ~15 minutes and covers gathering API keys, creating `.env`, and running `deploy.sh`.
+
 ## What It Does
 
 ### Job 1: Trending Tech Products (every 6 hours) — 100% Python, no AI

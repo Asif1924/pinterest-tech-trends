@@ -154,58 +154,93 @@ else
     echo "   Python: $($VENV_DIR/bin/python3 --version)"
 fi
 
-# --- Step 3: Update the cron job ---
+# --- Step 3: Update the cron jobs (all 3) ---
 echo ""
-echo "3. Updating cron job..."
+echo "3. Updating cron jobs..."
 
-if [[ ! -f "$SCRIPT_DIR/cron_job.json" ]]; then
-    echo "   WARNING: cron_job.json not found, skipping cron update"
-else
-    # Read the exported config
-    JOB_NAME=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/cron_job.json'))['name'])")
-    SCHEDULE=$(python3 -c "import json; print(json.load(open('$SCRIPT_DIR/cron_job.json'))['schedule'])")
+# Array of cron config files to process
+CRON_CONFIGS=(
+    "$SCRIPT_DIR/cron_job.json"
+    "$SCRIPT_DIR/cron_job_pins.json"
+    "$SCRIPT_DIR/cron_job_uploader.json"
+)
+
+JOBS_UPDATED=0
+for CONFIG_FILE in "${CRON_CONFIGS[@]}"; do
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        continue
+    fi
+
+    # Read the config
+    JOB_NAME=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['name'])" 2>/dev/null || echo "")
+    SCHEDULE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['schedule'])" 2>/dev/null || echo "")
+    SCRIPT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('script', ''))" 2>/dev/null || echo "")
+
+    if [[ -z "$JOB_NAME" ]] || [[ -z "$SCHEDULE" ]] || [[ -z "$SCRIPT" ]]; then
+        echo "   ⚠ Skipping $CONFIG_FILE (invalid format)"
+        continue
+    fi
 
     if [[ "$DRY_RUN" == true ]]; then
-        echo "   [would update] cron job: $JOB_NAME"
-        echo "   Schedule: $SCHEDULE"
+        echo "   [would update] $JOB_NAME (schedule: $SCHEDULE)"
     else
-        # Find existing job ID
+        # Find existing job ID by name or script
         JOB_ID=$(python3 -c "
 import json
-with open('$CRON_JOBS') as f:
-    data = json.load(f)
-for job in data.get('jobs', []):
-    if job.get('name') == '$JOB_NAME' or job.get('script') == 'trending_tech_products.py':
-        print(job['id'])
-        break
+try:
+    with open('$CRON_JOBS') as f:
+        data = json.load(f)
+    for job in data.get('jobs', []):
+        if job.get('name') == '$JOB_NAME' or job.get('script') == '$SCRIPT':
+            print(job['id'])
+            break
+except:
+    pass
 " 2>/dev/null || echo "")
 
         if [[ -n "$JOB_ID" ]]; then
-            echo "   Found existing job: $JOB_ID"
+            echo "   Found existing job: $JOB_ID ($JOB_NAME)"
             echo "   Updating prompt and schedule..."
 
             python3 -c "
 import json
+from datetime import datetime, timezone
+
 with open('$CRON_JOBS') as f:
     data = json.load(f)
-config = json.load(open('$SCRIPT_DIR/cron_job.json'))
+
+config = json.load(open('$CONFIG_FILE'))
+
 for job in data.get('jobs', []):
     if job['id'] == '$JOB_ID':
         job['prompt'] = config['prompt']
-        job['script'] = config.get('script', 'trending_tech_products.py')
+        job['script'] = config.get('script', '')
         job['schedule'] = {'kind': 'cron', 'expr': config['schedule'], 'display': config['schedule']}
         job['schedule_display'] = config['schedule']
+        if 'deliver' in config:
+            job['deliver'] = config['deliver']
         break
-from datetime import datetime, timezone
+
 data['updated_at'] = datetime.now(timezone.utc).isoformat()
+
 with open('$CRON_JOBS', 'w') as f:
     json.dump(data, f, indent=2)
-print('   ✓ Cron job updated')
+
+print('   ✓ Updated $JOB_NAME')
 "
+            JOBS_UPDATED=$((JOBS_UPDATED + 1))
         else
-            echo "   No existing job found. Create one with:"
-            echo "   hermes cron create --name '$JOB_NAME' --schedule '$SCHEDULE' --script trending_tech_products.py"
+            echo "   ⚠ No existing job found for: $JOB_NAME"
+            echo "     Create with: hermes cron create --name '$JOB_NAME' --schedule '$SCHEDULE' --script '$SCRIPT'"
         fi
+    fi
+done
+
+if [[ "$DRY_RUN" == false ]]; then
+    if [[ $JOBS_UPDATED -eq 0 ]]; then
+        echo "   (No existing jobs found. You may need to create them manually.)"
+    else
+        echo "   ($JOBS_UPDATED job(s) updated)"
     fi
 fi
 
