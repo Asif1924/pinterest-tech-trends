@@ -66,10 +66,9 @@
   },
   "llm": {
     "enabled": true,
-    "base_url": "http://192.168.1.7:1234/v1",
-    "model": "zai-org/glm-4.7-flash",
-    "timeout_seconds": 150,
-    "api_key": "lm-studio"
+    "base_url": "https://inference-api.nousresearch.com/v1",
+    "model": "nvidia/nemotron-3-ultra:free",
+    "timeout_seconds": 180
   },
   "firecrawl": {
     "enabled": true

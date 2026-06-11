@@ -90,7 +90,8 @@ LLM_ENABLED = LLM_CFG.get("enabled", True)
 LLM_BASE_URL = LLM_CFG.get("base_url", "http://192.168.1.7:1234/v1")
 LLM_MODEL = LLM_CFG.get("model", "hermes-qwen3.5-35b-a3b")
 LLM_TIMEOUT = LLM_CFG.get("timeout_seconds", 180)
-LLM_API_KEY = LLM_CFG.get("api_key", ENV.get("LMSTUDIO_API_KEY", "lm-studio"))
+LLM_API_KEY = LLM_CFG.get("api_key", ENV.get("NOUS_API_KEY", ENV.get("LMSTUDIO_API_KEY", "lm-studio")))
+print(f"  DEBUG: LLM_API_KEY = {LLM_API_KEY[:20]}..." if len(str(LLM_API_KEY)) > 20 else f"  DEBUG: LLM_API_KEY = {LLM_API_KEY}")
 
 # Links
 LINK_STRATEGY = CFG.get("link_strategy", 2)
@@ -646,11 +647,12 @@ def fetch_images_for_products(products, start_time=None, budget_seconds=30):
 
 
 # ── LLM Enrichment (LM Studio) ──────────────────────────────────────────────
-def _llm_chat(messages, max_tokens=3500, temperature=0.4, timeout=None):
+def call_llm(messages, max_tokens=8000, temperature=0.3, timeout=None):
     """Call an OpenAI-compatible chat completion endpoint (LM Studio).
 
     Returns the content string, or None on failure.
     """
+    print(f"  DEBUG: URL={LLM_BASE_URL}, Model={LLM_MODEL}, Key={str(LLM_API_KEY)[:20]}...")
     url = LLM_BASE_URL.rstrip("/") + "/chat/completions"
     body = json.dumps({
         "model": LLM_MODEL,
@@ -658,6 +660,7 @@ def _llm_chat(messages, max_tokens=3500, temperature=0.4, timeout=None):
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
+        "reasoning": False,
     }).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -755,7 +758,7 @@ def llm_enrich_products(products, start_time=None):
     )
 
     llm_start = time.time()
-    content = _llm_chat(
+    content = call_llm(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         max_tokens=4000,
         temperature=0.5,
