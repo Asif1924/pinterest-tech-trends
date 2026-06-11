@@ -124,41 +124,74 @@ def select_zernio_board(board_name):
 def upload_via_zernio(csv_path, pins, env):
     """Create pins via Zernio MCP instead of Selenium."""
     import requests
+    import json
     base = "https://mcp.zernio.com/mcp"
-    key = os.environ.get("ZERNIO_API_KEY", "")
+    key = env.get("ZERNIO_API_KEY", "")
     if not key:
         log("❌ ZERNIO_API_KEY not set — cannot use Zernio")
         return False
     headers = {
-        "Authorization": f"Bearer ***",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
     }
+    # Pinterest account ID from accounts_get
+    pinterest_account_id = "6a20a6fc2b2567671abb15bf"
     results = []
     for pin in pins:
+        image_url = pin.get("image_url") or pin.get("image") or ""
+        link_url = pin.get("link") or ""
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "mcp_zernio_posts_create_post",
+                "name": "posts_create_post",
                 "arguments": {
-                    "platform": "pinterest",
-                    "title": (pin.get("title") or "")[:100],
                     "content": (pin.get("description") or "")[:500],
-                    "link": pin.get("link") or "",
-                    "media_url": pin.get("image_url") or pin.get("image") or "",
-                    "board": select_zernio_board("SmartyPants2786"),
+                    "media_items": [{"type": "image", "url": image_url}],
+                    "platforms": [{
+                        "platform": "pinterest",
+                        "accountId": pinterest_account_id,
+                        "platformSpecificData": {
+                            "title": (pin.get("title") or "")[:100],
+                            "link": link_url,
+                        },
+                    }],
+                    "publish_now": True,
                 },
             },
         }
         try:
-            r = requests.post(base, headers=headers, json=payload, timeout=30)
-            results.append((pin, r.status_code == 200, r.text[:200]))
+            r = requests.post(base, headers=headers, json=payload, timeout=45)
+            log(f"Zernio response: status={r.status_code}, body={r.text[:300]}")
+
+            # Parse SSE response
+            ok = False
+            if r.status_code == 200:
+                for line in r.text.split('\n'):
+                    if line.startswith('data: '):
+                        try:
+                            data = json.loads(line[6:])
+                            result = data.get('result', {}) or {}
+                            if result.get('isError') is True:
+                                ok = False
+                            else:
+                                # Confirm the post actually published
+                                text_blob = ""
+                                for c in result.get('content', []) or []:
+                                    text_blob += c.get('text', '') or ''
+                                ok = "'status': 'published'" in text_blob or '"status": "published"' in text_blob
+                            break
+                        except Exception:
+                            pass
+            results.append((pin, ok, r.text[:200]))
         except Exception as e:
+            log(f"Zernio request failed: {e}")
             results.append((pin, False, str(e)))
     success_count = sum(1 for _, ok, _ in results if ok)
     log(f"✅ Zernio upload complete: {success_count}/{len(results)} pins created")
-    return success_count == len(results)
+    return success_count == len(results) and len(results) > 0
 
 
 def upload_via_browser_import(csv_path, pins, env):
@@ -425,14 +458,10 @@ def upload_via_browser_import(csv_path, pins, env):
                 if success:
                     log(f"✅ Successfully uploaded {len(pins)} pins via Import Content!")
                     send_telegram(f"🎉 Job 3 Phase 7: SUCCESS! {len(pins)} pins uploaded successfully via Import Content", env)
-                    # Mark pins as uploaded
-                    mark_batch_uploaded(pins)
                     return True
                 else:
                     log("⚠️ Upload completed but success not confirmed")
                     send_telegram("❓ Job 3 Phase 7: Upload completed but success indicators not found on page", env)
-                    # Still mark as uploaded since the upload likely worked
-                    mark_batch_uploaded(pins)
                     return True
             else:
                 log("❌ File input element not found - cannot upload CSV")
@@ -599,7 +628,7 @@ def main():
                         "title": row.get("title") or row.get("Title") or "",
                         "description": row.get("description") or row.get("Description") or "",
                         "link": row.get("link") or row.get("Link") or row.get("url") or "",
-                        "image_url": row.get("image_url") or row.get("Image URL") or row.get("image") or "",
+                        "image_url": row.get("image_url") or row.get("Image URL") or row.get("Media URL") or row.get("image") or "",
                         "board": row.get("board") or row.get("Board") or BOARD_NAME,
                     }
                 )
@@ -608,7 +637,7 @@ def main():
 
     # Prefer Zernio API
     zernio_ok = False
-    if list_zernio_tools_available() and os.environ.get("ZERNIO_API_KEY"):
+    if list_zernio_tools_available() and env.get("ZERNIO_API_KEY"):
         send_telegram("🤖 Job 3: Attempting direct Pinterest upload via Zernio API...", env)
         try:
             zernio_ok = upload_via_zernio(csv_path, pins, env)
@@ -619,56 +648,32 @@ def main():
 
     if zernio_ok:
         success = True
+        method = "Zernio direct API upload"
         log("✅ Zernio direct API upload succeeded")
         send_telegram("✅ Job 3: Zernio direct API upload succeeded", env)
+    else:
+        # Fallback to browser automation
+        send_telegram("🤖 Job 3: Attempting automated Pinterest upload via browser...", env)
+        success = upload_via_browser_import(csv_path, pins, env)
+        method = "automated browser upload" if success else "manual upload (instructions emailed)"
+        if success:
+            log("✅ Browser automation successful!")
+            send_telegram("✅ Job 3: Browser automation succeeded!", env)
+
+    if success:
         subject = f"✅ Pinterest Bulk Upload Complete - {pin_count} pins"
         body_html = create_success_html(pin_count, csv_path)
         send_email_report(subject, body_html, csv_path, env)
+
+        # Delete CSV file after successful upload and email
         try:
             os.remove(csv_path)
             log(f"Deleted CSV file: {csv_path}")
             send_telegram("🗑️ Cleaned up CSV file after successful upload", env)
         except Exception as e:
             log(f"Warning: Could not delete CSV file: {e}")
-        send_telegram(f"🎉 Job 3 COMPLETE: {pin_count} pins successfully uploaded to Pinterest via Zernio!", env)
-        method = "Zernio direct API upload"
-    else:
-        # Fallback to browser automation
-        send_telegram("🤖 Job 3: Attempting automated Pinterest upload via browser...", env)
-        success = upload_via_browser_import(csv_path, pins, env)
-        if success:
-            log("✅ Browser automation successful!")
-            send_telegram("✅ Job 3: Browser automation succeeded! Sending confirmation email...", env)
-            subject = f"✅ Pinterest Bulk Upload Complete - {pin_count} pins"
-            body_html = create_success_html(pin_count, csv_path)
-            send_email_report(subject, body_html, csv_path, env)
-            try:
-                os.remove(csv_path)
-                log(f"Deleted CSV file: {csv_path}")
-                send_telegram("🗑️ Cleaned up CSV file after successful upload", env)
-            except Exception as e:
-                log(f"Warning: Could not delete CSV file: {e}")
-            send_telegram(f"🎉 Job 3 COMPLETE: {pin_count} pins successfully uploaded to Pinterest via automation!", env)
-            method = "automated browser upload"
 
-    if success:
-        log("✅ Browser automation successful!")
-        send_telegram(f"✅ Job 3: Browser automation succeeded! Sending confirmation email...", env)
-        
-        subject = f"✅ Pinterest Bulk Upload Complete - {pin_count} pins"
-        body_html = create_success_html(pin_count, csv_path)
-        send_email_report(subject, body_html, csv_path, env)
-        
-        # Delete CSV file after successful upload and email
-        try:
-            os.remove(csv_path)
-            log(f"Deleted CSV file: {csv_path}")
-            send_telegram(f"🗑️ Cleaned up CSV file after successful upload", env)
-        except Exception as e:
-            log(f"Warning: Could not delete CSV file: {e}")
-        
-        # Enhanced completion message
-        send_telegram(f"🎉 Job 3 COMPLETE: {pin_count} pins successfully uploaded to Pinterest via automation!", env)
+        send_telegram(f"🎉 Job 3 COMPLETE: {pin_count} pins successfully uploaded to Pinterest via {method}!", env)
     else:
         log("⚠️ Browser automation failed — sending manual instructions")
         send_telegram(f"⚠️ Job 3: Browser automation failed, preparing manual upload instructions...", env)
@@ -717,7 +722,6 @@ Manual upload steps:
     log("=== Pinterest Pin Uploader Complete ===")
     
     # Final summary telegram message
-    method = "automated browser upload" if success else "manual upload (instructions emailed)"
     send_telegram(f"📋 Job 3 SUMMARY: Processed {pin_count} pins via {method}. Pinterest pipeline complete! 🎯", env)
 
 
