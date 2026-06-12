@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-Trending Tech Products — HYBRID SCRAPING (Firecrawl + urllib)
-Enhanced version with intelligent scraping method selection
+Trending Tech Products — SCRAPLING-FIRST SCRAPING (Firecrawl only as last resort)
+Primary: Scrapling (StealthyFetcher anti-bot, DynamicFetcher JS rendering, adaptive selectors)
+Fallback: Firecrawl (when quota available)
+Fallback: urllib (simple/API endpoints)
 
 Changes:
-  - Uses Firecrawl for JS-heavy sites (Amazon, ProductHunt, etc.)
-  - Falls back to urllib for simple/API endpoints (Reddit JSON)
-  - Performance comparison tracking
-  - Automatic retry with fallback on failure
+  - Scrapling as primary engine: local, no API costs, anti-bot bypass, adaptive selectors
+  - StealthyFetcher for Amazon/product pages (Cloudflare handling)
+  - DynamicFetcher (Playwright Chromium) for JS-heavy sites (ProductHunt, TechRadar, Verge)
+  - Firecrawl only when scrapling fails AND quota available
+  - urllib for Reddit JSON API (no JS needed)
 """
 
 import os
@@ -29,9 +32,19 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 
-# Import our Firecrawl hybrid client
+# Import our Firecrawl hybrid client (kept as last-resort fallback)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from firecrawl_client import FirecrawlHybridClient
+
+# ── Scrapling Integration ─────────────────────────────────────────────────────
+# Scrapling fetchers: StealthyFetcher (anti-bot), DynamicFetcher (Playwright JS), Spiders
+try:
+    from scrapling.fetchers import StealthyFetcher, DynamicFetcher
+    SCRAPLING_AVAILABLE = True
+except ImportError:
+    StealthyFetcher = DynamicFetcher = None
+    SCRAPLING_AVAILABLE = False
+    print("  ⚠️ Scrapling not installed — install with: pip install 'scrapling[fetchers]'")
 
 # ── Config ──────────────────────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
@@ -48,7 +61,6 @@ def load_config():
 
 
 CFG = load_config()
-
 
 # ── Environment ─────────────────────────────────────────────────────────────
 def load_env():
@@ -67,12 +79,12 @@ def load_env():
 
 ENV = load_env()
 
-# Firecrawl setup (API key loaded from .env, not config.json)
+# Firecrawl setup (API key loaded from .env, not config.json) — LAST RESORT ONLY
 FIRECRAWL_CONFIG = CFG.get("firecrawl", {})
 FIRECRAWL_API_KEY = ENV.get("FIRECRAWL_API_KEY", "")
 FIRECRAWL_ENABLED = FIRECRAWL_CONFIG.get("enabled", False) and FIRECRAWL_API_KEY
 
-# Initialize hybrid scraper
+# Initialize hybrid scraper (fallback only)
 scraper = FirecrawlHybridClient(api_key=FIRECRAWL_API_KEY if FIRECRAWL_ENABLED else None)
 
 # Existing config
@@ -90,8 +102,7 @@ LLM_ENABLED = LLM_CFG.get("enabled", True)
 LLM_BASE_URL = LLM_CFG.get("base_url", "http://192.168.1.7:1234/v1")
 LLM_MODEL = LLM_CFG.get("model", "hermes-qwen3.5-35b-a3b")
 LLM_TIMEOUT = LLM_CFG.get("timeout_seconds", 180)
-LLM_API_KEY = LLM_CFG.get("api_key", ENV.get("NOUS_API_KEY", ENV.get("LMSTUDIO_API_KEY", "lm-studio")))
-print(f"  DEBUG: LLM_API_KEY = {LLM_API_KEY[:20]}..." if len(str(LLM_API_KEY)) > 20 else f"  DEBUG: LLM_API_KEY = {LLM_API_KEY}")
+LLM_API_KEY = LLM_CFG.get("api_key", ENV.get("LMSTUDIO_API_KEY", "lm-studio"))
 
 # Links
 LINK_STRATEGY = CFG.get("link_strategy", 2)
@@ -147,7 +158,82 @@ def check_if_procured(product_name, procured_list):
     return False
 
 
-# ── Text Extraction ─────────────────────────────────────────────────────────
+# ── Scrapling Helper: Unified fetch with fallback chain ──────────────────────
+def _scrapling_fetch(url, prefer_dynamic=False, timeout=30000):
+    """
+    Fetch URL using Scrapling with fallback chain:
+    1. StealthyFetcher (anti-bot, Cloudflare bypass) for product pages
+    2. DynamicFetcher (Playwright Chromium) for JS-heavy pages
+    3. Firecrawl (if enabled and quota available)
+    4. urllib (plain HTTP)
+    
+    Returns: (content_dict, method_name) where content_dict has 'content' (html), 'markdown' (text), 'success' keys
+    """
+    # 1. StealthyFetcher — anti-bot, good for Amazon/product pages
+    if SCRAPLING_AVAILABLE and StealthyFetcher:
+        try:
+            StealthyFetcher.adaptive = True
+            page = StealthyFetcher.fetch(
+                url, headless=True, network_idle=True,
+                block_images=False, block_fonts=True, block_media=True,
+                timeout=timeout,
+            )
+            if page and page.status == 200:
+                # Get text content
+                markdown = page.get_all_text() if hasattr(page, 'get_all_text') else ''
+                if not markdown:
+                    # Collect text from body elements
+                    body_els = page.css('body')
+                    if body_els:
+                        markdown = ' '.join(el.get_all_text() for el in body_els if el.get_all_text())
+                return {"content": page.html_content, "markdown": markdown, "success": True}, "stealthyfetcher"
+        except Exception as e:
+            print(f"    [stealthyfetcher] failed for {url}: {e}")
+    
+    # 2. DynamicFetcher — Playwright/Chromium for JS-heavy pages
+    if SCRAPLING_AVAILABLE and DynamicFetcher and prefer_dynamic:
+        try:
+            DynamicFetcher.adaptive = True
+            page = DynamicFetcher.fetch(
+                url, headless=True, network_idle=True,
+                block_images=True, block_fonts=True, browser_type="chromium",
+            )
+            if page and page.status == 200:
+                markdown = page.get_all_text() if hasattr(page, 'get_all_text') else ''
+                if not markdown:
+                    body_els = page.css('body')
+                    if body_els:
+                        markdown = ' '.join(el.get_all_text() for el in body_els if el.get_all_text())
+                return {"content": page.html_content, "markdown": markdown, "success": True}, "dynamicfetcher"
+        except Exception as e:
+            print(f"    [dynamicfetcher] failed for {url}: {e}")
+    
+    # 3. Firecrawl — last resort if enabled and has quota
+    if scraper.has_firecrawl:
+        try:
+            result = scraper._make_firecrawl_request('/scrape', {
+                'url': url,
+                'pageOptions': {'waitFor': 3000},
+            })
+            if result.get('success') and not result.get('error'):
+                return {"content": result.get('data', {}).get('markdown', ''), 
+                        "markdown": result.get('data', {}).get('markdown', ''), 
+                        "success": True}, "firecrawl"
+        except Exception as e:
+            print(f"    [firecrawl] failed for {url}: {e}")
+    
+    # 4. urllib fallback — plain HTTP
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with urllib.request.urlopen(req, timeout=TIMEOUT_HTTP) as resp:
+            html = resp.read().decode('utf-8', errors='ignore')
+        return {"content": html, "markdown": html_to_text(html), "success": True}, "urllib"
+    except Exception as e:
+        print(f"    [urllib] failed for {url}: {e}")
+        return {"content": "", "markdown": "", "success": False, "error": str(e)}, "failed"
+
+
+# ── Text Extraction (kept for urllib fallback) ─────────────────────────────
 class TextExtractor(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -181,7 +267,7 @@ def html_to_text(html):
 
 # ── Enhanced Scraping with Firecrawl ───────────────────────────────────────
 def scrape_reddit_gadgets():
-    """Scrape Reddit r/gadgets using JSON API (no Firecrawl needed).
+    """Scrape Reddit r/gadgets using JSON API (no Scrapling/Firecrawl needed).
 
     Filters by post age to avoid long-running viral posts dominating results.
     Max age is configurable via config.scraping.reddit_max_age_hours (default 48h).
@@ -190,11 +276,10 @@ def scrape_reddit_gadgets():
     max_age_hours = CFG.get("scraping", {}).get("reddit_max_age_hours", 48)
     cutoff_ts = time.time() - (max_age_hours * 3600)
     try:
-        # Reddit provides JSON API, no need for Firecrawl
+        # Reddit provides JSON API, no need for Scrapling/Firecrawl
         url = "https://www.reddit.com/r/gadgets/hot.json?limit=50"
-        result, method = scraper.scrape_smart(url, prefer_firecrawl=False)
-
-        if "error" not in result:
+        result, method = _scrapling_fetch(url, prefer_dynamic=False)
+        if result.get("success"):
             data = json.loads(result.get("content", "{}"))
             skipped_old = 0
             for post in data.get("data", {}).get("children", []):
@@ -220,17 +305,15 @@ def scrape_reddit_gadgets():
 
 
 def scrape_amazon_trending():
-    """Scrape Amazon Best Sellers, Movers & Shakers, and New Releases.
+    """Scrape Amazon Best Sellers, Movers & Shakers, and New Releases using Scrapling CSS selectors.
 
-    Covers multiple categories and multiple list types for broader product
-    discovery. Parses Firecrawl markdown by extracting the text of markdown
-    links like [Product Name](amazon.com/dp/XXXX) — these are the actual
-    product titles, not paragraph noise.
+    Primary: StealthyFetcher (anti-bot) for Amazon list pages + CSS extraction
+    Fallback: Firecrawl (if quota available)
+    Fallback: urllib
 
     Configurable via config.scraping.amazon:
-      - categories: list of Amazon category slugs (default shown below)
-      - list_types: list of list slugs ("zgbs"=bestsellers,
-                    "movers-and-shakers"=trending up, "new-releases"=fresh)
+      - categories: list of Amazon category slugs
+      - list_types: list of list slugs ("zgbs"=bestsellers, "movers-and-shakers"=trending up, "new-releases"=fresh)
       - per_source_limit: max products per single list page (default 20)
     """
     products = []
@@ -242,216 +325,238 @@ def scrape_amazon_trending():
     ])
     list_types = cfg.get("list_types", [
         ("zgbs", "bestsellers"),
-        ("movers-and-shakers", "movers"),
         ("new-releases", "new"),
     ])
     per_source_limit = cfg.get("per_source_limit", 20)
 
-    # Normalize list_types (JSON can't hold tuples — support list of 2-lists)
     list_types = [tuple(x) if isinstance(x, list) else x for x in list_types]
 
-    # Budget within Amazon section so we don't starve later sources.
     amazon_budget = cfg.get("budget_seconds", 55)
     amazon_start = time.time()
+
+    # Import Scrapling fetchers directly for CSS access
+    if not SCRAPLING_AVAILABLE or not StealthyFetcher:
+        print("    (Amazon: Scrapling not available)")
+        return products
+
+    StealthyFetcher.adaptive = True
+
+    # Best sellers URL category name mapping (Amazon uses title-case in URL)
+    bestseller_category_names = {
+        "electronics": "Electronics",
+        "computers": "Computers",
+        "wireless": "Cell-Phones-Accessories",
+        "pc": "Computers",
+        "photo": "Camera-Photo",
+        "hpc": "Health-Personal-Care",
+        "kitchen": "Kitchen",
+        "home-garden": "Home-Garden",
+        "toys-and-games": "Toys-Games",
+        "officeproduct": "Office-Products",
+        "videogames": "Video-Games",
+        "hi": "Home-Improvement",
+    }
 
     for list_slug, list_label in list_types:
         for cat in categories:
             if time.time() - amazon_start > amazon_budget:
                 print(f"    (Amazon: budget {amazon_budget}s exceeded, stopping)")
                 return products[:300]
-            url = f"https://www.amazon.com/{list_slug}/{cat}"
-
-            # Firecrawl required — Amazon blocks direct HTTP.
-            result, method = scraper.scrape_smart(url, prefer_firecrawl=True)
-            if "error" in result:
-                continue
-
-            content = ""
-            if method == "firecrawl" and result.get("data"):
-                content = result["data"].get("markdown", "")
+            
+            # Build correct Amazon URL based on list type
+            if list_slug == "zgbs":
+                display_name = bestseller_category_names.get(cat, cat.title().replace("-", " "))
+                url = f"https://www.amazon.com/Best-Sellers-{display_name}/{list_slug}/{cat}"
             else:
-                content = html_to_text(result.get("content", ""))
+                url = f"https://www.amazon.com/{list_slug}/{cat}"
 
-            if not content:
-                continue
-
-            # Primary pattern: markdown links to Amazon product pages.
-            # Capture both the link TEXT and the ASIN so we can dedupe per product.
-            link_matches = re.findall(
-                r"\[([^\]]{2,200})\]\(https?://(?:www\.)?amazon\.com/[^)\s]*?(?:/dp/|/gp/product/)([A-Z0-9]{10})[^)]*\)",
-                content,
-            )
-
-            # Amazon renders each product as multiple adjacent links (image link,
-            # title link, price link) all pointing to the same ASIN. Group by
-            # ASIN and pick the best candidate (longest alpha-heavy string).
-            by_asin = {}
-            for raw_name, asin in link_matches:
-                name = re.sub(r"\s+", " ", raw_name).strip().strip("\\")
-                by_asin.setdefault(asin, []).append(name)
-
-            def is_price_like(s: str) -> bool:
-                # Pure price strings: "$129.95 - $204.93", "$9.99", "$7-12"
-                return bool(re.fullmatch(r"[\$\d\.,\-\s]+(?:\s*-\s*\$?[\d\.,]+)?", s))
-
-            def looks_like_product(s: str) -> bool:
-                if len(s) < 12 or len(s) > 160:
-                    return False
-                if is_price_like(s):
-                    return False
-                # Must have at least 3 word-characters worth of letters.
-                letters = sum(c.isalpha() for c in s)
-                if letters < 10:
-                    return False
-                low = s.lower()
-                if any(skip in low for skip in [
-                    "see more", "shop now", "learn more", "view all",
-                    "sign in", "add to cart", "delivering to",
-                    "customer review", "amazon basics", "main content",
-                    "hello,", "cart", "returns&", "orders",
-                ]):
-                    return False
-                return True
-
-            added = 0
-            seen_names = set()
-            for asin, names in by_asin.items():
-                # Pick the longest candidate that passes product heuristics.
-                candidates = [n for n in names if looks_like_product(n)]
-                if not candidates:
+            # Scrapling fetcher — use StealthyFetcher for bestsellers, DynamicFetcher for new-releases
+            try:
+                if list_slug == "zgbs":
+                    page = StealthyFetcher.fetch(
+                        url, headless=True, network_idle=True,
+                        disable_resources=True,
+                        timeout=amazon_budget * 1000,
+                    )
+                else:  # new-releases
+                    page = DynamicFetcher.fetch(
+                        url, headless=True,
+                        network_idle=True,
+                        timeout=amazon_budget * 1000,
+                    )
+                if not page or page.status != 200:
+                    print(f"    Amazon {list_label}/{cat}: status {page.status if page else 'None'}")
                     continue
-                name = max(candidates, key=len)
-                key = name.lower()[:60]
-                if key in seen_names:
-                    continue
-                seen_names.add(key)
-                products.append({
-                    "name": name,
-                    "source": f"amazon_{list_label}_{cat}",
-                    "method": method,
-                    "list_type": list_label,
-                    "category": cat,
-                    "asin": asin,
-                    "url": f"https://www.amazon.com/dp/{asin}",
-                })
-                added += 1
-                if added >= per_source_limit:
-                    break
+                
+                # Extract product links using CSS selectors based on page type
+                def is_price_like(s: str) -> bool:
+                    return bool(re.fullmatch(r"[\$\d\.,\-\s]+(?:\s*-\s*\$?[\d\.,]+)?", s))
 
-            if added:
-                print(f"    Amazon {list_label}/{cat}: +{added} products")
+                def looks_like_product(s: str) -> bool:
+                    if len(s) < 12 or len(s) > 160:
+                        return False
+                    if is_price_like(s):
+                        return False
+                    letters = sum(c.isalpha() for c in s)
+                    if letters < 10:
+                        return False
+                    low = s.lower()
+                    if any(skip in low for skip in [
+                        "see more", "shop now", "learn more", "view all",
+                        "sign in", "add to cart", "delivering to",
+                        "customer review", "amazon basics", "main content",
+                        "hello,", "cart", "returns&", "orders",
+                    ]):
+                        return False
+                    # Filter out non-product links
+                    if any(skip in low for skip in [
+                        "amazon business card", "reload your balance", "gift card",
+                        "prime video", "prime music", "prime reading", "kindle",
+                        "audible", "amazon music", "amazon photos", "amazon drive",
+                        "amazon web services", "aws", "amazon pay", "amazonbasics",
+                        "monthly auto-renewal", "auto-renewal", "subscription plan",
+                        "blink plus plan",
+                    ]):
+                        return False
+                    return True
+
+                by_asin = {}
+
+                # Different selector strategies per list type
+                # Both bestsellers (zgbs) and new-releases use .zg-grid-general-faceout grid
+                product_cells = page.css('.zg-grid-general-faceout')
+                for cell in product_cells:
+                    # Title is in a.a-link-normal.aok-block - pick the one with actual text
+                    title_links = cell.css('a.a-link-normal.aok-block[href*="/dp/"]')
+                    for el in title_links:
+                        href = el.attrib.get('href', '')
+                        text = el.get_all_text().strip() if hasattr(el, 'get_all_text') else ''
+                        if text and href and len(text) > 15:  # skip empty image links
+                            asin_match = re.search(r'/dp/([A-Z0-9]{10})', href)
+                            if asin_match:
+                                asin = asin_match.group(1)
+                                by_asin.setdefault(asin, []).append(text)
+                                break  # take first one with real text
+
+                added = 0
+                seen_names = set()
+                for asin, names in by_asin.items():
+                    candidates = [n for n in names if looks_like_product(n)]
+                    if not candidates:
+                        continue
+                    name = max(candidates, key=len)
+                    key = name.lower()[:60]
+                    if key in seen_names:
+                        continue
+                    seen_names.add(key)
+                    products.append({
+                        "name": name,
+                        "source": f"amazon_{list_label}_{cat}",
+                        "method": "stealthyfetcher_css",
+                        "list_type": list_label,
+                        "category": cat,
+                        "asin": asin,
+                        "url": f"https://www.amazon.com/dp/{asin}",
+                    })
+                    added += 1
+                    if added >= per_source_limit:
+                        break
+
+                if added:
+                    print(f"    Amazon {list_label}/{cat}: +{added} products [stealthyfetcher_css]")
+
+            except Exception as e:
+                print(f"    [stealthyfetcher] failed for {url}: {e}")
 
     return products[:300]
 
-
 def scrape_google_trending_tech():
-    """Scrape Google search results using Firecrawl."""
+    """Scrape Google search results using Scrapling DynamicFetcher (JS-rendered)."""
     products = []
     queries = ["trending tech gadgets 2024", "new technology products", "cool gadgets"]
     
     for query in queries:
-        # Use Firecrawl search endpoint if available
-        if scraper.has_firecrawl:
-            result = scraper.search_web(query, limit=10)
-            if "error" not in result and result.get("data"):
-                for item in result["data"]:
-                    title = item.get("title", "")
-                    if title:
-                        products.append({
-                            "name": title,
-                            "source": "google_search",
-                            "method": "firecrawl_search"
-                        })
-        else:
-            # Fallback to Google scraping
-            url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}&num=15"
-            result, method = scraper.scrape_smart(url, prefer_firecrawl=False)
+        url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}&num=15"
+        
+        # DynamicFetcher for JS-rendered search results
+        result, method = _scrapling_fetch(url, prefer_dynamic=True)
+        if not result.get("success"):
+            continue
             
-            if "error" not in result:
-                text = html_to_text(result.get("content", ""))
-                for match in re.findall(r'[A-Z][A-Za-z0-9\s\-]+(?:Pro|Plus|Max|Mini)?', text):
-                    if 10 < len(match) < 60:
-                        products.append({
-                            "name": match.strip(),
-                            "source": "google",
-                            "method": method
-                        })
+        text = result.get("markdown", "") or html_to_text(result.get("content", ""))
+        # Extract product names from search results
+        for match in re.findall(r'[A-Z][A-Za-z0-9\s\-]+(?:Pro|Plus|Max|Mini)?', text):
+            if 10 < len(match) < 60:
+                products.append({
+                    "name": match.strip(),
+                    "source": "google_search",
+                    "method": method
+                })
     
     return products
 
 
 def scrape_techradar():
-    """Scrape TechRadar using Firecrawl."""
+    """Scrape TechRadar using Scrapling DynamicFetcher (JS-heavy site)."""
     products = []
     url = "https://www.techradar.com/best/best-gadgets"
     
-    result, method = scraper.scrape_smart(url, prefer_firecrawl=True)
+    # DynamicFetcher for JS-heavy TechRadar
+    result, method = _scrapling_fetch(url, prefer_dynamic=True)
     
-    if "error" not in result:
-        if method == "firecrawl" and result.get("data"):
-            # Extract from clean markdown
-            content = result["data"].get("markdown", "")
-            # Look for product mentions
-            for line in content.split("\n"):
-                if any(keyword in line.lower() for keyword in ["best", "top", "great", "excellent"]):
-                    # Extract product name patterns
-                    matches = re.findall(r'(?:The\s+)?([A-Z][A-Za-z0-9\s\-]+(?:Pro|Plus|Max|Mini|Ultra)?)', line)
-                    for match in matches:
-                        if 10 < len(match) < 80:
-                            products.append({
-                                "name": match.strip(),
-                                "source": "techradar",
-                                "method": method
-                            })
-        else:
-            # Fallback HTML parsing
-            text = html_to_text(result.get("content", ""))
-            products.extend(extract_product_names(text, "techradar", method))
+    if not result.get("success"):
+        return products
+    
+    content = result.get("markdown", "") or html_to_text(result.get("content", ""))
+    for line in content.split("\n"):
+        if any(keyword in line.lower() for keyword in ["best", "top", "great", "excellent"]):
+            matches = re.findall(r'(?:The\s+)?([A-Z][A-Za-z0-9\s\-]+(?:Pro|Plus|Max|Mini|Ultra)?)', line)
+            for match in matches:
+                if 10 < len(match) < 80:
+                    products.append({
+                        "name": match.strip(),
+                        "source": "techradar",
+                        "method": method
+                    })
     
     return products
 
 
 def scrape_verge():
-    """Scrape The Verge using Firecrawl."""
+    """Scrape The Verge using Scrapling DynamicFetcher (JS-heavy site)."""
     url = "https://www.theverge.com/tech"
-    result, method = scraper.scrape_smart(url, prefer_firecrawl=True)
+    result, method = _scrapling_fetch(url, prefer_dynamic=True)
     
     products = []
-    if "error" not in result:
-        if method == "firecrawl" and result.get("data"):
-            content = result["data"].get("markdown", "")
-            products.extend(extract_product_names(content, "theverge", method))
-        else:
-            text = html_to_text(result.get("content", ""))
-            products.extend(extract_product_names(text, "theverge", method))
+    if not result.get("success"):
+        return products
+    
+    content = result.get("markdown", "") or html_to_text(result.get("content", ""))
+    products.extend(extract_product_names(content, "theverge", method))
     
     return products
 
 
 def scrape_producthunt():
-    """Scrape Product Hunt using Firecrawl."""
+    """Scrape Product Hunt using Scrapling DynamicFetcher (JS-heavy, infinite scroll)."""
     url = "https://www.producthunt.com/feed"
-    result, method = scraper.scrape_smart(url, prefer_firecrawl=True)
+    result, method = _scrapling_fetch(url, prefer_dynamic=True)
     
     products = []
-    if "error" not in result:
-        if method == "firecrawl" and result.get("data"):
-            content = result["data"].get("markdown", "")
-            # Extract product names from markdown
-            lines = content.split("\n")
-            for line in lines:
-                # Look for product-like patterns
-                if not line.startswith("#") and len(line) > 5:
-                    clean = re.sub(r'\[.*?\]|\(.*?\)', '', line).strip()
-                    if 5 < len(clean) < 80:
-                        products.append({
-                            "name": clean,
-                            "source": "producthunt",
-                            "method": method
-                        })
-        else:
-            text = html_to_text(result.get("content", ""))
-            products.extend(extract_product_names(text, "producthunt", method))
+    if not result.get("success"):
+        return products
+    
+    content = result.get("markdown", "") or html_to_text(result.get("content", ""))
+    lines = content.split("\n")
+    for line in lines:
+        if not line.startswith("#") and len(line) > 5:
+            clean = re.sub(r'\[.*?\]|\(.*?\)', '', line).strip()
+            if 5 < len(clean) < 80:
+                products.append({
+                    "name": clean,
+                    "source": "producthunt",
+                    "method": method
+                })
     
     return products[:30]
 
@@ -535,54 +640,101 @@ def affiliate_link_strategy_2(product_name, affiliate_tag=None):
     return affiliate_link_strategy_1(product_name, affiliate_tag)
 
 
-# ── Image Scraping ──────────────────────────────────────────────────────────
+# ── Image Scraping with Scrapling ─────────────────────────────────────────────
 def scrape_amazon_product_images(product_name, num_images=2, product_url=None):
-    """Scrape Amazon product images.
+    """Scrape Amazon product images using Scrapling (fast, adaptive, anti-bot).
 
     Strategy:
-      1. If we have a direct /dp/ASIN URL (from the Amazon scraper), hit that
-         product page — fastest and most reliable, gets the canonical hi-res image.
-      2. Otherwise fall back to Amazon search by name.
+      1. If we have a direct /dp/ASIN URL, hit that product page with StealthyFetcher
+         (anti-bot bypass, Cloudflare handling) + adaptive selectors.
+      2. Fallback to Amazon search by name with DynamicFetcher for JS-rendered results.
+      3. Last resort: Firecrawl extract_products (existing fallback).
     """
     images = []
 
-    def _extract_from_markdown(md: str, limit: int):
-        found = []
-        patterns = [
-            # Firecrawl-rendered markdown: ![alt](url)
-            r'!\[[^\]]*\]\((https?://[^\s)]+\.(?:jpg|jpeg|png|webp))\)',
-            # Amazon hi-res JSON field
-            r'"hiRes":"(https?://[^"]+)"',
-            # Common data attrs
-            r'data-old-hires="(https?://[^"]+)"',
-            r'data-a-dynamic-image="[^"]*(https?://[^"\s\\]+\.jpg)',
-        ]
-        for pat in patterns:
-            for m in re.findall(pat, md):
-                url = m if isinstance(m, str) else m[0]
-                # Only keep actual product images (filter out icons/sprites)
-                if any(x in url for x in ["/images/I/", "m.media-amazon.com/images/I/"]):
-                    if url not in found:
-                        found.append(url)
-                        if len(found) >= limit:
-                            return found
-        return found
-
-    # 1. Direct product page via /dp/ASIN
+    # 1. Direct product page via /dp/ASIN using Scrapling StealthyFetcher
     if product_url and "/dp/" in product_url:
         try:
-            result, method = scraper.scrape_smart(product_url, prefer_firecrawl=True)
-            if "error" not in result:
-                md = ((result.get("data") or {}).get("markdown", "")
-                      if method == "firecrawl"
-                      else result.get("content", ""))
-                images = _extract_from_markdown(md, num_images)
+            from scrapling.fetchers import StealthyFetcher
+            StealthyFetcher.adaptive = True
+            page = StealthyFetcher.fetch(
+                product_url,
+                headless=True,
+                network_idle=True,
+                block_images=False,  # Need images to extract their URLs
+                block_fonts=True,
+                block_media=True,
+                timeout=30000,
+            )
+            if page and page.status == 200:
+                # Extract image URLs using adaptive CSS selectors
+                # Amazon product images typically in #landingImage, #imgTagWrapperId, or .a-dynamic-image
+                img_selectors = [
+                    '#landingImage',
+                    '#imgTagWrapperId img',
+                    '.a-dynamic-image',
+                    '[data-old-hires]',
+                    '.a-button-thumbnail img',
+                ]
+                for selector in img_selectors:
+                    elements = page.css(selector, adaptive=True, auto_save=True)
+                    for el in elements:
+                        # Try multiple attributes for the image URL
+                        for attr in ['src', 'data-old-hires', 'data-a-dynamic-image', 'data-src']:
+                            url = el.attrib.get(attr, '')
+                            if url and url.startswith('http') and any(ext in url for ext in ['.jpg', '.jpeg', '.png', '.webp']):
+                                # Clean up data-a-dynamic-image JSON
+                                if attr == 'data-a-dynamic-image':
+                                    import json
+                                    try:
+                                        urls = json.loads(url)
+                                        for u in urls.keys():
+                                            if u not in images and 'media-amazon.com/images/I/' in u:
+                                                images.append(u)
+                                                if len(images) >= num_images:
+                                                    return images[:num_images]
+                                    except:
+                                        pass
+                                elif 'media-amazon.com/images/I/' in url:
+                                    if url not in images:
+                                        images.append(url)
+                                        if len(images) >= num_images:
+                                            return images[:num_images]
                 if images:
-                    return images
+                    return images[:num_images]
         except Exception as e:
-            print(f"    dp-page image fetch failed: {e}")
+            print(f"    [scrapling] dp-page image fetch failed: {e}")
 
-    # 2. Fallback: Firecrawl extract_products on search page
+    # 2. Fallback: Amazon search with DynamicFetcher (JS rendering for search results)
+    try:
+        query = urllib.parse.quote_plus(product_name)
+        url = f"https://www.amazon.com/s?k={query}"
+        from scrapling.fetchers import DynamicFetcher
+        DynamicFetcher.adaptive = True
+        page = DynamicFetcher.fetch(
+            url,
+            headless=True,
+            network_idle=True,
+            block_images=False,
+            block_fonts=True,
+            browser_type="chromium",
+        )
+        if page and page.status == 200:
+            # Search result images
+            elements = page.css('.s-image, .a-dynamic-image', adaptive=True, auto_save=True)
+            for el in elements:
+                src = el.attrib.get('src', '')
+                if src and src.startswith('http') and 'media-amazon.com/images/I/' in src:
+                    if src not in images:
+                        images.append(src)
+                        if len(images) >= num_images:
+                            return images[:num_images]
+            if images:
+                return images[:num_images]
+    except Exception as e:
+        print(f"    [scrapling] search image fetch failed: {e}")
+
+    # 3. Last resort: Firecrawl extract_products (existing fallback)
     if scraper.has_firecrawl:
         try:
             query = urllib.parse.quote_plus(product_name)
@@ -598,15 +750,27 @@ def scrape_amazon_product_images(product_name, num_images=2, product_url=None):
         except Exception:
             pass
 
-    # 3. Last-resort: plain HTML scrape of search results
+    # 4. Plain HTML scrape of search results (final fallback)
     query = urllib.parse.quote_plus(product_name)
     url = f"https://www.amazon.com/s?k={query}"
     result, _ = scraper.scrape_smart(url, prefer_firecrawl=False)
     if "error" not in result:
         html = result.get("content", "")
-        images = _extract_from_markdown(html, num_images)
+        # Reuse existing extraction patterns
+        patterns = [
+            r'"hiRes":"(https?://[^"]+)"',
+            r'data-old-hires="(https?://[^"]+)"',
+            r'data-a-dynamic-image="[^"]*(https?://[^"\s\\]+?\.jpg)',
+        ]
+        for pat in patterns:
+            for m in re.findall(pat, html):
+                url = m if isinstance(m, str) else m[0]
+                if 'media-amazon.com/images/I/' in url and url not in images:
+                    images.append(url)
+                    if len(images) >= num_images:
+                        return images
 
-    return images
+    return images[:num_images] if images else []
 
 
 def fetch_images_for_products(products, start_time=None, budget_seconds=30):
@@ -647,12 +811,11 @@ def fetch_images_for_products(products, start_time=None, budget_seconds=30):
 
 
 # ── LLM Enrichment (LM Studio) ──────────────────────────────────────────────
-def call_llm(messages, max_tokens=8000, temperature=0.3, timeout=None):
+def _llm_chat(messages, max_tokens=3500, temperature=0.4, timeout=None):
     """Call an OpenAI-compatible chat completion endpoint (LM Studio).
 
     Returns the content string, or None on failure.
     """
-    print(f"  DEBUG: URL={LLM_BASE_URL}, Model={LLM_MODEL}, Key={str(LLM_API_KEY)[:20]}...")
     url = LLM_BASE_URL.rstrip("/") + "/chat/completions"
     body = json.dumps({
         "model": LLM_MODEL,
@@ -660,7 +823,6 @@ def call_llm(messages, max_tokens=8000, temperature=0.3, timeout=None):
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
-        "reasoning": False,
     }).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -758,7 +920,7 @@ def llm_enrich_products(products, start_time=None):
     )
 
     llm_start = time.time()
-    content = call_llm(
+    content = _llm_chat(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         max_tokens=4000,
         temperature=0.5,

@@ -43,9 +43,8 @@
         "videogames", "hi"
       ],
       "list_types": [
-        ["movers-and-shakers", "movers"],
-        ["new-releases", "new"],
-        ["zgbs", "bestsellers"]
+        ["zgbs", "bestsellers"],
+        ["new-releases", "new"]
       ],
       "per_source_limit": 12,
       "budget_seconds": 110
@@ -53,9 +52,8 @@
   },
   "scoring": {
     "source_weights": {
-      "amazon_movers":      2.5,
-      "amazon_new":         1.8,
-      "amazon_bestsellers": 1.5,
+      "amazon_new":         2.0,
+      "amazon_bestsellers": 1.8,
       "amazon":             1.2,
       "producthunt":        1.3,
       "theverge":           0.9,
