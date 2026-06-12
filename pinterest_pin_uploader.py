@@ -60,9 +60,25 @@ def load_env():
     return env
 
 
+ZERNIO_LOG_PATH = os.path.join(HERMES_HOME, "logs", "pin_uploader.log")
+
+
 def log(message):
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print(f"[{timestamp}] {message}")
+    # flush=True so per-line output isn't swallowed when stdout is a subprocess pipe.
+    print(f"[{timestamp}] {message}", flush=True)
+
+
+def log_detail(message):
+    """Persist a diagnostic line to ~/.hermes/logs/pin_uploader.log so per-pin
+    request/response detail survives across subprocess captures."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        os.makedirs(os.path.dirname(ZERNIO_LOG_PATH), exist_ok=True)
+        with open(ZERNIO_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except Exception:
+        pass
 
 
 def send_telegram(text, env):
@@ -138,7 +154,8 @@ def upload_via_zernio(csv_path, pins, env):
     # Pinterest account ID from accounts_get
     pinterest_account_id = "6a20a6fc2b2567671abb15bf"
     results = []
-    for pin in pins:
+    log_detail(f"=== Zernio batch starting: {len(pins)} pins, csv={csv_path} ===")
+    for idx, pin in enumerate(pins, 1):
         image_url = pin.get("image_url") or pin.get("image") or ""
         link_url = pin.get("link") or ""
         payload = {
@@ -162,9 +179,14 @@ def upload_via_zernio(csv_path, pins, env):
                 },
             },
         }
+        log_detail(
+            f"pin {idx}/{len(pins)} REQUEST title={(pin.get('title') or '')!r} "
+            f"image_url={image_url} link={link_url}"
+        )
         try:
             r = requests.post(base, headers=headers, json=payload, timeout=45)
             log(f"Zernio response: status={r.status_code}, body={r.text[:300]}")
+            log_detail(f"pin {idx}/{len(pins)} RESPONSE status={r.status_code} body={r.text}")
 
             # Parse SSE response
             ok = False
@@ -185,9 +207,11 @@ def upload_via_zernio(csv_path, pins, env):
                             break
                         except Exception:
                             pass
+            log_detail(f"pin {idx}/{len(pins)} PARSED ok={ok}")
             results.append((pin, ok, r.text[:200]))
         except Exception as e:
             log(f"Zernio request failed: {e}")
+            log_detail(f"pin {idx}/{len(pins)} REQUEST_EXCEPTION {e!r}")
             results.append((pin, False, str(e)))
     success_count = sum(1 for _, ok, _ in results if ok)
     log(f"✅ Zernio upload complete: {success_count}/{len(results)} pins created")
