@@ -48,16 +48,27 @@ echo "1. Deploying scraper script..."
 mkdir -p "$HERMES_SCRIPTS"
 
 if [[ "$DRY_RUN" == true ]]; then
-    if diff -q "$SCRIPT_DIR/trending_tech_products.py" "$HERMES_SCRIPTS/trending_tech_products.py" &>/dev/null; then
-        echo "   [no changes] trending_tech_products.py"
-    else
-        echo "   [would update] trending_tech_products.py"
-    fi
+    for F in trending_tech_products.py pinterest_pin_generator.py pinterest_pin_uploader.py \
+             pipeline_paths.py pipeline_manifest.py pinterest_pipeline_health.py \
+             pinterest_config.json; do
+        if [[ ! -f "$SCRIPT_DIR/$F" ]]; then
+            continue
+        fi
+        if diff -q "$SCRIPT_DIR/$F" "$HERMES_SCRIPTS/$F" &>/dev/null; then
+            echo "   [no changes] $F"
+        else
+            echo "   [would update] $F"
+        fi
+    done
 else
     cp "$SCRIPT_DIR/trending_tech_products.py" "$HERMES_SCRIPTS/trending_tech_products.py"
     echo "   ✓ Copied to $HERMES_SCRIPTS/trending_tech_products.py"
     if [[ -f "$SCRIPT_DIR/config.json" ]]; then
         cp "$SCRIPT_DIR/config.json" "$HERMES_SCRIPTS/pinterest_config.json"
+        echo "   ✓ Copied config to $HERMES_SCRIPTS/pinterest_config.json"
+    fi
+    if [[ -f "$SCRIPT_DIR/pinterest_config.json" ]]; then
+        cp "$SCRIPT_DIR/pinterest_config.json" "$HERMES_SCRIPTS/pinterest_config.json"
         echo "   ✓ Copied config to $HERMES_SCRIPTS/pinterest_config.json"
     fi
     if [[ -f "$SCRIPT_DIR/pinterest_pin_generator.py" ]]; then
@@ -68,6 +79,13 @@ else
         cp "$SCRIPT_DIR/pinterest_pin_uploader.py" "$HERMES_SCRIPTS/pinterest_pin_uploader.py"
         echo "   ✓ Copied to $HERMES_SCRIPTS/pinterest_pin_uploader.py"
     fi
+    # Shared modules — must be alongside the job scripts so Python imports resolve.
+    for MOD in pipeline_paths.py pipeline_manifest.py pinterest_pipeline_health.py; do
+        if [[ -f "$SCRIPT_DIR/$MOD" ]]; then
+            cp "$SCRIPT_DIR/$MOD" "$HERMES_SCRIPTS/$MOD"
+            echo "   ✓ Copied to $HERMES_SCRIPTS/$MOD"
+        fi
+    done
     if [[ -f "$SCRIPT_DIR/.env" ]]; then
         cp "$SCRIPT_DIR/.env" "$HERMES_SCRIPTS/.env"
         chmod 600 "$HERMES_SCRIPTS/.env"
