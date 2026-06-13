@@ -103,7 +103,7 @@ LLM_ENABLED = LLM_CFG.get("enabled", True)
 LLM_BASE_URL = LLM_CFG.get("base_url", "http://192.168.1.7:1234/v1")
 LLM_MODEL = LLM_CFG.get("model", "hermes-qwen3.5-35b-a3b")
 LLM_TIMEOUT = LLM_CFG.get("timeout_seconds", 180)
-LLM_API_KEY = LLM_CFG.get("api_key", ENV.get("LMSTUDIO_API_KEY", "lm-studio"))
+LLM_API_KEY = LLM_CFG.get("api_key", ENV.get("NOUS_API_KEY") or ENV.get("LMSTUDIO_API_KEY", "lm-studio"))
 
 # Links
 LINK_STRATEGY = CFG.get("link_strategy", 2)
@@ -465,6 +465,20 @@ def scrape_google_trending_tech():
     products = []
     queries = ["trending tech gadgets 2024", "new technology products", "cool gadgets"]
     
+    # Blocklist common UI elements that appear in Google search results
+    UI_BLOCKLIST = {
+        "please try again later", "you can", "see our", "privacy policy", "terms of service",
+        "cookie policy", "sign in", "log in", "create account", "forgot password",
+        "skip to main content", "accessibility help", "press", "choose what you",
+        "min", "max", "from your ip address", "update location", "learn more",
+        "updating location", "read more", "best buy", "nothing phone", "on",
+        "free delivery", "error has occurred", "holiday gift guide", "see results",
+        "view all", "show more", "load more", "youtube", "in this video",
+        "amazon", "amazon ca", "and", "or", "the", "for", "with", "buy", "shop",
+        "price", "deal", "sale", "off", "percent", "%", "shipping", "delivery",
+        "returns", "warranty", "support", "contact", "about", "help", "faq"
+    }
+    
     for query in queries:
         url = f"https://www.google.com/search?q={urllib.parse.quote_plus(query)}&num=15"
         
@@ -477,8 +491,19 @@ def scrape_google_trending_tech():
         # Extract product names from search results
         for match in re.findall(r'[A-Z][A-Za-z0-9\s\-]+(?:Pro|Plus|Max|Mini)?', text):
             if 10 < len(match) < 60:
+                cleaned = match.strip()
+                # Skip if it's a blocked UI phrase
+                lowered = cleaned.lower()
+                if any(blocked in lowered for blocked in UI_BLOCKLIST):
+                    continue
+                # Must contain at least one letter and look like a product (not sentence fragment)
+                if not re.search(r'[A-Za-z]', cleaned):
+                    continue
+                # Skip obvious sentence fragments
+                if re.search(r'\b(is|are|was|were|the|and|for|with|from|your|you|can|see|our)\b', lowered):
+                    continue
                 products.append({
-                    "name": match.strip(),
+                    "name": cleaned,
                     "source": "google_search",
                     "method": method
                 })
@@ -489,7 +514,8 @@ def scrape_google_trending_tech():
 def scrape_techradar():
     """Scrape TechRadar using Scrapling DynamicFetcher (JS-heavy site)."""
     products = []
-    url = "https://www.techradar.com/best/best-gadgets"
+    # Updated URL - old /best/best-gadgets returns 404
+    url = "https://www.techradar.com/tech/the-best-tech-of-2025-so-far-the-17-finest-gadgets-weve-tested-this-year"
     
     # DynamicFetcher for JS-heavy TechRadar
     result, method = _scrapling_fetch(url, prefer_dynamic=True)
@@ -499,7 +525,7 @@ def scrape_techradar():
     
     content = result.get("markdown", "") or html_to_text(result.get("content", ""))
     for line in content.split("\n"):
-        if any(keyword in line.lower() for keyword in ["best", "top", "great", "excellent"]):
+        if any(keyword in line.lower() for keyword in ["best", "top", "great", "excellent", "finest"]):
             matches = re.findall(r'(?:The\s+)?([A-Z][A-Za-z0-9\s\-]+(?:Pro|Plus|Max|Mini|Ultra)?)', line)
             for match in matches:
                 if 10 < len(match) < 80:
