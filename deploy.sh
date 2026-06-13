@@ -50,7 +50,7 @@ mkdir -p "$HERMES_SCRIPTS"
 if [[ "$DRY_RUN" == true ]]; then
     for F in trending_tech_products.py pinterest_pin_generator.py pinterest_pin_uploader.py \
              pipeline_paths.py pipeline_manifest.py pinterest_pipeline_health.py \
-             pinterest_config.json; do
+             pinterest_config.json .env; do
         if [[ ! -f "$SCRIPT_DIR/$F" ]]; then
             continue
         fi
@@ -63,10 +63,8 @@ if [[ "$DRY_RUN" == true ]]; then
 else
     cp "$SCRIPT_DIR/trending_tech_products.py" "$HERMES_SCRIPTS/trending_tech_products.py"
     echo "   ✓ Copied to $HERMES_SCRIPTS/trending_tech_products.py"
-    if [[ -f "$SCRIPT_DIR/config.json" ]]; then
-        cp "$SCRIPT_DIR/config.json" "$HERMES_SCRIPTS/pinterest_config.json"
-        echo "   ✓ Copied config to $HERMES_SCRIPTS/pinterest_config.json"
-    fi
+    # pinterest_config.json is the single source of truth. (config.json in the repo
+    # root is a stale snapshot; the Python code never reads it.)
     if [[ -f "$SCRIPT_DIR/pinterest_config.json" ]]; then
         cp "$SCRIPT_DIR/pinterest_config.json" "$HERMES_SCRIPTS/pinterest_config.json"
         echo "   ✓ Copied config to $HERMES_SCRIPTS/pinterest_config.json"
@@ -189,74 +187,102 @@ for CONFIG_FILE in "${CRON_CONFIGS[@]}"; do
         continue
     fi
 
-    # Read the config
-    JOB_NAME=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['name'])" 2>/dev/null || echo "")
-    SCHEDULE=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['schedule'])" 2>/dev/null || echo "")
-    SCRIPT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE')).get('script', ''))" 2>/dev/null || echo "")
+    # Read the config (heredoc + env var — no shell-into-Python interpolation)
+    CONFIG_SUMMARY=$(CONFIG_FILE="$CONFIG_FILE" python3 - <<'PY' 2>/dev/null
+import json, os, sys
+try:
+    with open(os.environ["CONFIG_FILE"]) as f:
+        cfg = json.load(f)
+    print(cfg.get("name", ""))
+    print(cfg.get("schedule", ""))
+    print(cfg.get("script", ""))
+except Exception:
+    sys.exit(1)
+PY
+    ) || CONFIG_SUMMARY=""
+    JOB_NAME=$(sed -n '1p' <<<"$CONFIG_SUMMARY")
+    SCHEDULE=$(sed -n '2p' <<<"$CONFIG_SUMMARY")
+    SCRIPT=$(sed -n '3p' <<<"$CONFIG_SUMMARY")
 
     if [[ -z "$JOB_NAME" ]] || [[ -z "$SCHEDULE" ]] || [[ -z "$SCRIPT" ]]; then
         echo "   ⚠ Skipping $CONFIG_FILE (invalid format)"
         continue
     fi
 
-    if [[ "$DRY_RUN" == true ]]; then
-        echo "   [would update] $JOB_NAME (schedule: $SCHEDULE)"
-    else
-        # Find existing job ID by name or script
-        JOB_ID=$(python3 -c "
-import json
+    # Look up the existing job by name OR by script basename (jobs.json may
+    # store the absolute path, while configs store just the filename).
+    JOB_ID=$(CRON_JOBS_PATH="$CRON_JOBS" JOB_NAME="$JOB_NAME" JOB_SCRIPT="$SCRIPT" \
+             python3 - <<'PY' 2>/dev/null
+import json, os
 try:
-    with open('$CRON_JOBS') as f:
+    with open(os.environ["CRON_JOBS_PATH"]) as f:
         data = json.load(f)
-    for job in data.get('jobs', []):
-        if job.get('name') == '$JOB_NAME' or job.get('script') == '$SCRIPT':
-            print(job['id'])
-            break
-except:
-    pass
-" 2>/dev/null || echo "")
+except Exception:
+    raise SystemExit(0)
+want_name = os.environ.get("JOB_NAME", "")
+want_script = os.path.basename(os.environ.get("JOB_SCRIPT", ""))
+for job in data.get("jobs", []):
+    job_script = os.path.basename(job.get("script", "") or "")
+    if job.get("name") == want_name or (want_script and job_script == want_script):
+        print(job["id"])
+        break
+PY
+    ) || JOB_ID=""
 
+    if [[ "$DRY_RUN" == true ]]; then
         if [[ -n "$JOB_ID" ]]; then
-            echo "   Found existing job: $JOB_ID ($JOB_NAME)"
-            echo "   Updating prompt and schedule..."
+            echo "   [would update] $JOB_NAME ($JOB_ID) → schedule: $SCHEDULE"
+        else
+            echo "   [would create] $JOB_NAME → schedule: $SCHEDULE"
+        fi
+        continue
+    fi
 
-            python3 -c "
-import json
+    if [[ -n "$JOB_ID" ]]; then
+        echo "   Found existing job: $JOB_ID ($JOB_NAME)"
+        echo "   Updating prompt, schedule, and enabled flag..."
+
+        CRON_JOBS_PATH="$CRON_JOBS" JOB_ID="$JOB_ID" CONFIG_FILE="$CONFIG_FILE" \
+            python3 - <<'PY'
+import json, os
 from datetime import datetime, timezone
 
-with open('$CRON_JOBS') as f:
+with open(os.environ["CRON_JOBS_PATH"]) as f:
     data = json.load(f)
 
-config = json.load(open('$CONFIG_FILE'))
+with open(os.environ["CONFIG_FILE"]) as f:
+    config = json.load(f)
 
-for job in data.get('jobs', []):
-    if job['id'] == '$JOB_ID':
-        job['prompt'] = config['prompt']
-        job['script'] = config.get('script', '')
-        job['schedule'] = {'kind': 'cron', 'expr': config['schedule'], 'display': config['schedule']}
-        job['schedule_display'] = config['schedule']
-        if 'deliver' in config:
-            job['deliver'] = config['deliver']
+job_id = os.environ["JOB_ID"]
+for job in data.get("jobs", []):
+    if job["id"] == job_id:
+        job["prompt"] = config["prompt"]
+        job["script"] = config.get("script", "")
+        job["schedule"] = {"kind": "cron", "expr": config["schedule"], "display": config["schedule"]}
+        job["schedule_display"] = config["schedule"]
+        if "deliver" in config:
+            job["deliver"] = config["deliver"]
+        if "enabled" in config:
+            job["enabled"] = config["enabled"]
         break
 
-data['updated_at'] = datetime.now(timezone.utc).isoformat()
+data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-with open('$CRON_JOBS', 'w') as f:
+with open(os.environ["CRON_JOBS_PATH"], "w") as f:
     json.dump(data, f, indent=2)
 
-print('   ✓ Updated $JOB_NAME')
-"
-            JOBS_UPDATED=$((JOBS_UPDATED + 1))
-        else
-            echo "   ⚠ No existing job found for: $JOB_NAME"
-            echo "     Create with: hermes cron create --name '$JOB_NAME' --schedule '$SCHEDULE' --script '$SCRIPT'"
-        fi
+print(f"   ✓ Updated {config.get('name','')}")
+PY
+        JOBS_UPDATED=$((JOBS_UPDATED + 1))
+    else
+        echo "   ⚠ No existing job found for: $JOB_NAME"
+        echo "     Create with: hermes cron create --name '$JOB_NAME' --schedule '$SCHEDULE' --script '$SCRIPT'"
     fi
 done
 
 if [[ "$DRY_RUN" == false ]]; then
     if [[ $JOBS_UPDATED -eq 0 ]]; then
-        echo "   (No existing jobs found. You may need to create them manually.)"
+        echo "   (No existing jobs updated. You may need to create them manually.)"
     else
         echo "   ($JOBS_UPDATED job(s) updated)"
     fi
@@ -278,28 +304,49 @@ if [[ "$DRY_RUN" == false ]]; then
         echo "   ✗ Venv not found!"
     fi
 
+    # Report status of every configured cron job, not just Job 1.
     if [[ -f "$CRON_JOBS" ]]; then
-        python3 -c "
-import json
-with open('$CRON_JOBS') as f:
+        for CONFIG_FILE in "${CRON_CONFIGS[@]}"; do
+            [[ -f "$CONFIG_FILE" ]] || continue
+            CRON_JOBS_PATH="$CRON_JOBS" CONFIG_FILE="$CONFIG_FILE" python3 - <<'PY'
+import json, os
+with open(os.environ["CRON_JOBS_PATH"]) as f:
     data = json.load(f)
-for job in data.get('jobs', []):
-    if job.get('script') == 'trending_tech_products.py':
-        print(f'   ✓ Cron job active: {job[\"name\"]} (ID: {job[\"id\"]})')
-        print(f'     Schedule: {job.get(\"schedule_display\", \"?\")}')
-        print(f'     Deliver:  {job.get(\"deliver\", \"?\")}')
+with open(os.environ["CONFIG_FILE"]) as f:
+    cfg = json.load(f)
+want_name = cfg.get("name", "")
+want_script = os.path.basename(cfg.get("script", "") or "")
+for job in data.get("jobs", []):
+    job_script = os.path.basename(job.get("script", "") or "")
+    if job.get("name") == want_name or (want_script and job_script == want_script):
+        status = "enabled" if job.get("enabled", True) else "disabled"
+        print(f"   ✓ {job['name']} ({job['id']}) — {job.get('schedule_display','?')} [{status}]")
         break
-"
+else:
+    print(f"   ✗ Not registered in jobs.json: {want_name}")
+PY
+        done
     fi
 
-    # Test the script runs
+    # Non-destructive import check: validates syntax and that venv deps resolve
+    # for all three job scripts, without triggering the live pipeline.
     echo ""
-    echo "   Testing script execution..."
-    RESULT=$("$VENV_DIR/bin/python3" "$HERMES_SCRIPTS/trending_tech_products.py" 2>&1 | head -1)
-    if echo "$RESULT" | grep -q '"date"'; then
-        echo "   ✓ Script runs successfully in venv"
-    else
-        echo "   ⚠ Script output unexpected: $RESULT"
+    echo "   Verifying job scripts import cleanly..."
+    IMPORT_OK=true
+    for MOD in trending_tech_products pinterest_pin_generator pinterest_pin_uploader; do
+        if [[ ! -f "$HERMES_SCRIPTS/$MOD.py" ]]; then
+            continue
+        fi
+        if IMPORT_ERR=$(cd "$HERMES_SCRIPTS" && "$VENV_DIR/bin/python3" -c "import $MOD" 2>&1); then
+            echo "   ✓ $MOD imports cleanly"
+        else
+            echo "   ✗ $MOD failed to import:"
+            echo "$IMPORT_ERR" | sed 's/^/       /'
+            IMPORT_OK=false
+        fi
+    done
+    if [[ "$IMPORT_OK" != true ]]; then
+        echo "   ⚠ One or more scripts failed to import — check venv deps."
     fi
 fi
 
