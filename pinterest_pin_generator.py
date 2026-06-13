@@ -16,12 +16,17 @@ import csv
 import json
 import smtplib
 import subprocess
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pipeline_paths as paths
+import pipeline_manifest as manifest
 
 # ── Config ──────────────────────────────────────────────────────────────────
 HERMES_HOME = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
@@ -39,7 +44,8 @@ def load_config():
 CFG = load_config()
 PINS_DIR = os.path.join(HERMES_HOME, "pinterest_pins")
 BOARD_NAME = CFG.get("pinterest", {}).get("board_name", "SmartyPants2786")
-CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
+CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")  # legacy fallback only
+MIN_PINS_GATE = CFG.get("quality_gates", {}).get("min_pins", 3)
 
 HASHTAGS = {
     "Smart Home and IoT": "#SmartHome #IoT #HomeAutomation #TechHome #GadgetGoals",
@@ -179,15 +185,30 @@ def send_email_report(subject, body_text, pins_data, errors, csv_attachment_path
 
 # ── CSV Processing ──────────────────────────────────────────────────────────
 
-def load_csv_data():
-    """Load and parse the trending tech products CSV"""
-    if not os.path.exists(CSV_PATH):
-        print(f"ERROR: CSV file not found at {CSV_PATH}")
+def resolve_input_csv(run_dir):
+    """Return the canonical raw-products CSV for this run.
+
+    Prefers <run_dir>/01_raw_products.csv; falls back to the legacy CSV_PATH
+    (/tmp/trending_tech_products.csv) so manual Job 2 invocations against an
+    older Job 1 still work.
+    """
+    if run_dir is not None:
+        run_csv = run_dir / paths.RAW_CSV_NAME
+        if run_csv.exists():
+            return str(run_csv)
+    return CSV_PATH
+
+
+def load_csv_data(csv_path=None):
+    """Load and parse the trending tech products CSV."""
+    csv_path = csv_path or CSV_PATH
+    if not os.path.exists(csv_path):
+        print(f"ERROR: CSV file not found at {csv_path}")
         return []
-    
+
     products = []
     try:
-        with open(CSV_PATH, 'r', encoding='utf-8') as f:
+        with open(csv_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 products.append({
@@ -354,26 +375,25 @@ def cleanup_old_pins_local():
 
 # ── Pinterest Bulk Upload CSV ───────────────────────────────────────────────
 
-def generate_pinterest_csv(pins_data, date_str):
-    """Generate a Pinterest-compatible CSV for bulk upload.
-    Pinterest Import Content format: Media, Board, Title, Description, Link, Alt text
-    Excludes any pins without a media URL.
-    """
-    csv_path = os.path.join(HERMES_HOME, f"pinterest_bulk_upload_{date_str}.csv")
+def generate_pinterest_csv(pins_data, run_dir):
+    """Write the Pinterest bulk-upload CSV into the run directory.
 
+    Returns (csv_path, valid_pins, excluded_pins). The run dir is itself the
+    archive — there is no separate archive copy.
+    """
+    csv_path = run_dir / paths.BULK_CSV_NAME
+
+    valid_pins = 0
+    excluded_pins = 0
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Title", "Media URL", "Pinterest board", "Description", "Link", "Keywords"])
-
-        valid_pins = 0
-        excluded_pins = 0
 
         for pin in pins_data:
             image_url = pin.get("primary_image", "")
             if not image_url and pin.get("images"):
                 image_url = pin["images"][0].get("url", "")
 
-            # Skip pins without a media URL
             if not image_url:
                 excluded_pins += 1
                 print(f"⚠️  Excluding pin '{pin.get('title', 'Unknown')}' - no media URL")
@@ -384,29 +404,17 @@ def generate_pinterest_csv(pins_data, date_str):
                 description = description[:497] + "..."
 
             writer.writerow([
-                pin.get('title', '')[:100],  # Title (limit to 100 chars)
-                image_url,  # Media URL
-                BOARD_NAME,  # Pinterest board
-                description,  # Description
-                pin.get('link', ''),  # Link
-                pin.get('alt_text', pin.get('title', ''))[:500]  # Keywords
+                pin.get('title', '')[:100],
+                image_url,
+                BOARD_NAME,
+                description,
+                pin.get('link', ''),
+                pin.get('alt_text', pin.get('title', ''))[:500],
             ])
             valid_pins += 1
 
     print(f"📄 Pinterest bulk upload CSV created: {csv_path} ({valid_pins} valid pins, {excluded_pins} excluded due to missing media URL)")
-
-    # Archive copy to ~/.hermes/pinterest_csv/ for history (so Job 3 deletion doesn't lose it)
-    try:
-        import shutil
-        archive_dir = os.path.join(HERMES_HOME, "pinterest_csv")
-        os.makedirs(archive_dir, exist_ok=True)
-        archive_path = os.path.join(archive_dir, f"pinterest_upload_{date_str}.csv")
-        shutil.copy2(csv_path, archive_path)
-        print(f"📁 Archived to: {archive_path}")
-    except Exception as e:
-        print(f"⚠️ Archive save failed: {e}")
-
-    return csv_path
+    return str(csv_path), valid_pins, excluded_pins
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -414,14 +422,29 @@ def generate_pinterest_csv(pins_data, date_str):
 def main():
     today = datetime.now(timezone.utc)
     date_str = today.strftime("%Y%m%d")
-    
+    job2_start = time.time()
+
     print(f"📌 Pinterest Pin Generator started: {today.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # Load product data from CSV
-    products = load_csv_data()
+
+    # Resolve the run dir set up by Job 1. If invoked standalone (no env, no
+    # `current` symlink), fall through to legacy CSV_PATH and create a fresh
+    # run dir so we still get a manifest for this invocation.
+    run_dir = paths.resolve_run_dir()
+    if run_dir is None:
+        run_dir = paths.new_run_dir()
+        paths.set_current(run_dir)
+        manifest.init(run_dir)
+        print(f"  ⚠️ No upstream run id; created run dir {run_dir}")
+    else:
+        print(f"  Run id: {paths.run_id_of(run_dir)}")
+
+    input_csv = resolve_input_csv(run_dir)
+    products = load_csv_data(input_csv)
     if not products:
         print("❌ No products found or CSV loading failed")
-        return
+        manifest.append_error(run_dir, "job2", f"input CSV missing/empty: {input_csv}")
+        manifest.finalize(run_dir, "failed")
+        sys.exit(2)
     
     # Clean up old pin files
     deleted_count = cleanup_old_pins_local()
@@ -486,11 +509,33 @@ def main():
         for product_name, error_msg in errors:
             summary_text += f"\n  • {product_name}: {error_msg}"
     
-    # Generate Pinterest bulk upload CSV
+    # Generate Pinterest bulk upload CSV (into the run dir)
     csv_path = None
+    valid_pins = 0
+    excluded_pins = 0
     if pins_data:
-        csv_path = generate_pinterest_csv(pins_data, date_str)
+        csv_path, valid_pins, excluded_pins = generate_pinterest_csv(pins_data, run_dir)
         summary_text += f"\n\n📄 Pinterest CSV: {csv_path}"
+
+    manifest.set_stage(run_dir, "job2", {
+        "pins_generated": valid_pins,
+        "excluded_no_media": excluded_pins,
+        "csv": csv_path,
+        "min_pins_gate": MIN_PINS_GATE,
+        "elapsed_s": round(time.time() - job2_start, 2),
+    })
+
+    # Health gate: refuse to chain Job 3 with too few pins. Historically the
+    # uploader happily published 0–2-pin runs and the failure was invisible.
+    if valid_pins < MIN_PINS_GATE:
+        msg = f"min_pins gate failed: {valid_pins} < {MIN_PINS_GATE}"
+        print(f"\n🚫 {msg} — refusing to chain Job 3")
+        manifest.append_error(run_dir, "job2", msg)
+        manifest.finalize(run_dir, "failed")
+        # Still send the report email so a human sees the degradation.
+        email_subject = f"⚠️ Pinterest Pin Generator: only {valid_pins} pins (gate {MIN_PINS_GATE})"
+        send_email_report(email_subject, summary_text + f"\n\n🚫 {msg}", pins_data, errors, csv_attachment_path=csv_path)
+        sys.exit(3)
 
     # Print summary to stdout
     print("\n" + summary_text)
@@ -498,24 +543,25 @@ def main():
     # Send detailed email report
     email_subject = f"Pinterest Pin Generator Report - {len(pins_data)} pins created ({len(new_products)} new)"
     email_success = send_email_report(email_subject, summary_text, pins_data, errors, csv_attachment_path=csv_path)
-    
+
     if email_success:
         print(f"\n✅ Report complete: {len(pins_data)} pins created, detailed email sent")
     else:
         print(f"\n⚠️ Report complete: {len(pins_data)} pins created, but email failed")
-    
+
     # Chain Job 3 (Pinterest Pin Uploader) immediately after Job 2 completes.
-    # Inherits env + cwd so the uploader has access to Pinterest creds and
-    # relative paths (selenium drivers, CSV output dir, etc.).
+    # Pass the run id so Job 3 reads from the same per-run directory.
     if pins_data:
         try:
             print("\n🔗 Chaining Job 3 (Pinterest Pin Uploader)...")
             script_dir = os.path.dirname(os.path.abspath(__file__))
             uploader_script = os.path.join(script_dir, "pinterest_pin_uploader.py")
+            job3_env = os.environ.copy()
+            job3_env[paths.RUN_ID_ENV] = paths.run_id_of(run_dir)
             result = subprocess.run(
                 [sys.executable, uploader_script],
-                capture_output=True, text=True, timeout=300,  # 5 minute timeout
-                env=os.environ.copy(),
+                capture_output=True, text=True, timeout=300,
+                env=job3_env,
                 cwd=script_dir,
             )
 

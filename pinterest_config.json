@@ -25,6 +25,17 @@
     "pins_folder_id": "1p4JS0GDHVny1IBDbcSNghgKHaY_64E5D"
   },
   "csv_path": "/tmp/trending_tech_products.csv",
+  "paths": {
+    "root": "~/.hermes/pinterest"
+  },
+  "quality_gates": {
+    "min_pins": 3
+  },
+  "retention": {
+    "keep_last_successful": 30,
+    "keep_last_failed": 10,
+    "archive_after_days": 90
+  },
   "timeouts": {
     "http_request": 15,
     "telegram_api": 10,
@@ -37,16 +48,15 @@
   "scraping": {
     "reddit_max_age_hours": 48,
     "amazon": {
+      "domain": "ca",
       "categories": [
-        "electronics", "computers", "wireless", "pc", "photo",
-        "hpc", "kitchen", "home-garden", "toys-and-games", "officeproduct",
-        "videogames", "hi"
+        "toys"
       ],
       "list_types": [
         ["zgbs", "bestsellers"],
         ["new-releases", "new"]
       ],
-      "per_source_limit": 12,
+      "per_source_limit": 20,
       "budget_seconds": 110
     }
   },

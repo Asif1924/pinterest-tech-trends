@@ -35,6 +35,8 @@ from email import encoders
 # Import our Firecrawl hybrid client (kept as last-resort fallback)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from firecrawl_client import FirecrawlHybridClient
+import pipeline_paths as paths
+import pipeline_manifest as manifest
 
 # ── Scrapling Integration ─────────────────────────────────────────────────────
 # Scrapling fetchers: StealthyFetcher (anti-bot), DynamicFetcher (Playwright JS), Spiders
@@ -319,15 +321,14 @@ def scrape_amazon_trending():
     products = []
     cfg = CFG.get("scraping", {}).get("amazon", {})
     categories = cfg.get("categories", [
-        "electronics", "computers", "wireless", "pc", "photo",
-        "hpc", "kitchen", "home-garden", "toys-and-games", "officeproduct",
-        "videogames", "hi",
+        "toys-and-games",
     ])
     list_types = cfg.get("list_types", [
         ("zgbs", "bestsellers"),
         ("new-releases", "new"),
     ])
     per_source_limit = cfg.get("per_source_limit", 20)
+    amazon_domain = cfg.get("domain", "com")
 
     list_types = [tuple(x) if isinstance(x, list) else x for x in list_types]
 
@@ -342,19 +343,9 @@ def scrape_amazon_trending():
     StealthyFetcher.adaptive = True
 
     # Best sellers URL category name mapping (Amazon uses title-case in URL)
+    # Amazon.ca uses 'toys' as category slug (not 'toys-and-games')
     bestseller_category_names = {
-        "electronics": "Electronics",
-        "computers": "Computers",
-        "wireless": "Cell-Phones-Accessories",
-        "pc": "Computers",
-        "photo": "Camera-Photo",
-        "hpc": "Health-Personal-Care",
-        "kitchen": "Kitchen",
-        "home-garden": "Home-Garden",
-        "toys-and-games": "Toys-Games",
-        "officeproduct": "Office-Products",
-        "videogames": "Video-Games",
-        "hi": "Home-Improvement",
+        "toys": "Toys-Games",
     }
 
     for list_slug, list_label in list_types:
@@ -366,9 +357,9 @@ def scrape_amazon_trending():
             # Build correct Amazon URL based on list type
             if list_slug == "zgbs":
                 display_name = bestseller_category_names.get(cat, cat.title().replace("-", " "))
-                url = f"https://www.amazon.com/Best-Sellers-{display_name}/{list_slug}/{cat}"
+                url = f"https://www.amazon.{amazon_domain}/Best-Sellers-{display_name}/{list_slug}/{cat}"
             else:
-                url = f"https://www.amazon.com/{list_slug}/{cat}"
+                url = f"https://www.amazon.{amazon_domain}/{list_slug}/{cat}"
 
             # Scrapling fetcher — use StealthyFetcher for bestsellers, DynamicFetcher for new-releases
             try:
@@ -456,7 +447,7 @@ def scrape_amazon_trending():
                         "list_type": list_label,
                         "category": cat,
                         "asin": asin,
-                        "url": f"https://www.amazon.com/dp/{asin}",
+                        "url": f"https://www.amazon.{amazon_domain}/dp/{asin}",
                     })
                     added += 1
                     if added >= per_source_limit:
@@ -592,18 +583,22 @@ def extract_product_names(text, source, method):
 def affiliate_link_strategy_1(product_name, affiliate_tag=None):
     """Strategy 1: Search Links — always works, lower conversion."""
     tag = affiliate_tag or AFFILIATE_TAG
+    cfg = CFG.get("scraping", {}).get("amazon", {})
+    amazon_domain = cfg.get("domain", "com")
     terms = urllib.parse.quote_plus(product_name)
-    return f"https://www.amazon.com/s?k={terms}&tag={tag}"
+    return f"https://www.amazon.{amazon_domain}/s?k={terms}&tag={tag}"
 
 
 def affiliate_link_strategy_2(product_name, affiliate_tag=None):
     """Strategy 2: Direct Product Links using Firecrawl."""
     tag = affiliate_tag or AFFILIATE_TAG
+    cfg = CFG.get("scraping", {}).get("amazon", {})
+    amazon_domain = cfg.get("domain", "com")
     
     # Try Firecrawl first for better extraction
     if scraper.has_firecrawl:
         query = urllib.parse.quote_plus(product_name)
-        url = f"https://www.amazon.com/s?k={query}"
+        url = f"https://www.amazon.{amazon_domain}/s?k={query}"
         
         # Use Firecrawl's extract feature for product data
         products = scraper.extract_products(url)
@@ -614,11 +609,11 @@ def affiliate_link_strategy_2(product_name, affiliate_tag=None):
             asin_match = re.search(r'/dp/([A-Z0-9]{10})', product_link)
             if asin_match:
                 asin = asin_match.group(1)
-                return f"https://www.amazon.com/dp/{asin}?tag={tag}"
+                return f"https://www.amazon.{amazon_domain}/dp/{asin}?tag={tag}"
     
     # Fallback to original method
     query = urllib.parse.quote_plus(product_name)
-    url = f"https://www.amazon.com/s?k={query}"
+    url = f"https://www.amazon.{amazon_domain}/s?k={query}"
     result, _ = scraper.scrape_smart(url, prefer_firecrawl=False)
     
     if "error" not in result:
@@ -634,7 +629,7 @@ def affiliate_link_strategy_2(product_name, affiliate_tag=None):
             match = re.search(pattern, html)
             if match:
                 asin = match.group(1)
-                return f"https://www.amazon.com/dp/{asin}?tag={tag}"
+                return f"https://www.amazon.{amazon_domain}/dp/{asin}?tag={tag}"
     
     # Fallback to search link
     return affiliate_link_strategy_1(product_name, affiliate_tag)
@@ -1086,8 +1081,15 @@ def main():
     # LLM enrichment — fills Category/Description/Why Trending/Price Range/Pin Caption
     products = llm_enrich_products(products, start_time=start_time)
 
-    # Save CSV in the rich schema Job 2 (pinterest_pin_generator.py) expects.
-    print(f"  Saving CSV to {CSV_PATH}")
+    # Create a fresh per-run directory and write the raw CSV into it. The
+    # legacy /tmp path is still written to as a compatibility shim for any
+    # external tooling that hardcodes it.
+    run_dir = paths.new_run_dir()
+    run_csv = run_dir / paths.RAW_CSV_NAME
+    paths.set_current(run_dir)
+    manifest.init(run_dir)
+    print(f"  Run id: {paths.run_id_of(run_dir)}")
+    print(f"  Saving CSV to {run_csv}")
     rich_fields = [
         "Number", "Product Name", "Category", "Description", "Why Trending",
         "Price Range", "Amazon Link", "Pin Caption Idea",
@@ -1095,7 +1097,7 @@ def main():
         # Legacy/diagnostic columns retained for backward compat + debugging:
         "score", "sources", "method",
     ]
-    with open(CSV_PATH, "w", newline="", encoding="utf-8") as f:
+    with open(run_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=rich_fields)
         writer.writeheader()
         for i, p in enumerate(products, 1):
@@ -1116,7 +1118,21 @@ def main():
                 "sources": ",".join(set(p["sources"])),
                 "method": p.get("method", "unknown"),
             })
-    
+
+    # Compatibility shim: keep the legacy /tmp path populated for any external
+    # tooling that still reads CSV_PATH directly. The run-dir copy is canonical.
+    try:
+        import shutil as _shutil
+        _shutil.copy2(run_csv, CSV_PATH)
+    except Exception as _e:
+        print(f"  ⚠️ Legacy CSV shim copy failed: {_e}")
+
+    manifest.set_stage(run_dir, "job1", {
+        "scraped": len(products),
+        "csv": str(run_csv),
+        "elapsed_s": round(time.time() - start_time, 2),
+    })
+
     # Send email report
     send_email_report(products)
     
@@ -1148,13 +1164,15 @@ def main():
     print("  Triggering Job 2 (Pin Generator)...")
     script_path = os.path.join(os.path.dirname(__file__), "pinterest_pin_generator.py")
     job2_start = time.time()
+    job2_env = os.environ.copy()
+    job2_env[paths.RUN_ID_ENV] = paths.run_id_of(run_dir)
     try:
         result = subprocess.run(
             [sys.executable, script_path],
             timeout=TIMEOUT_JOB2,
             capture_output=True,
             text=True,
-            env=os.environ.copy(),
+            env=job2_env,
             cwd=os.path.dirname(__file__),
         )
         job2_elapsed = time.time() - job2_start
