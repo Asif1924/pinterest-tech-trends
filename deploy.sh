@@ -49,6 +49,7 @@ mkdir -p "$HERMES_SCRIPTS"
 
 if [[ "$DRY_RUN" == true ]]; then
     for F in trending_tech_products.py pinterest_pin_generator.py pinterest_pin_uploader.py \
+             trending_tech_products.sh pinterest_pin_generator.sh pinterest_pin_uploader.sh \
              pipeline_paths.py pipeline_manifest.py pinterest_pipeline_health.py \
              pinterest_config.json .env; do
         if [[ ! -f "$SCRIPT_DIR/$F" ]]; then
@@ -82,6 +83,17 @@ else
         if [[ -f "$SCRIPT_DIR/$MOD" ]]; then
             cp "$SCRIPT_DIR/$MOD" "$HERMES_SCRIPTS/$MOD"
             echo "   ✓ Copied to $HERMES_SCRIPTS/$MOD"
+        fi
+    done
+    # Bash shims — these are what cron actually invokes (see cron_job*.json). They
+    # exec the project venv's python3 so scrapling/playwright/etc. are importable.
+    # Without them, Hermes runs the .py files under its own interpreter (which does
+    # not ship those packages) and Amazon scraping silently no-ops.
+    for SH in trending_tech_products.sh pinterest_pin_generator.sh pinterest_pin_uploader.sh; do
+        if [[ -f "$SCRIPT_DIR/$SH" ]]; then
+            cp "$SCRIPT_DIR/$SH" "$HERMES_SCRIPTS/$SH"
+            chmod +x "$HERMES_SCRIPTS/$SH"
+            echo "   ✓ Copied to $HERMES_SCRIPTS/$SH"
         fi
     done
     if [[ -f "$SCRIPT_DIR/.env" ]]; then
