@@ -142,6 +142,30 @@ else
         echo "   ✓ Venv exists at $VENV_DIR"
     fi
 
+    # Sanity-check the venv's python3 against pyvenv.cfg.
+    # If the system python3 is upgraded after the venv was created, the
+    # bin/python3 symlink can end up pointing at a different Python version
+    # than the one pip installs packages for, so `import <pkg>` silently
+    # fails even though `pip install` "succeeded".
+    if [[ -f "$VENV_DIR/pyvenv.cfg" ]]; then
+        EXPECTED_PYVER=$(awk -F'[= ]+' '/^version[[:space:]]*=/ {print $2}' "$VENV_DIR/pyvenv.cfg" | cut -d. -f1-2)
+        ACTUAL_PYVER=$("$VENV_DIR/bin/python3" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "")
+        if [[ -n "$EXPECTED_PYVER" && "$EXPECTED_PYVER" != "$ACTUAL_PYVER" ]]; then
+            echo "   ⚠ Venv python mismatch: bin/python3 reports $ACTUAL_PYVER, pyvenv.cfg expects $EXPECTED_PYVER"
+            if [[ -x "$VENV_DIR/bin/python$EXPECTED_PYVER" ]]; then
+                ln -sfn "python$EXPECTED_PYVER" "$VENV_DIR/bin/python3"
+                ACTUAL_PYVER=$("$VENV_DIR/bin/python3" -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "")
+                if [[ "$EXPECTED_PYVER" == "$ACTUAL_PYVER" ]]; then
+                    echo "   ✓ Repaired bin/python3 symlink → python$EXPECTED_PYVER"
+                fi
+            fi
+            if [[ "$EXPECTED_PYVER" != "$ACTUAL_PYVER" ]]; then
+                echo "   ERROR: cannot repair venv. Delete $VENV_DIR and rerun ./deploy.sh to rebuild."
+                exit 1
+            fi
+        fi
+    fi
+
     # Upgrade pip
     "$VENV_DIR/bin/pip" install --upgrade pip -q 2>/dev/null
 
