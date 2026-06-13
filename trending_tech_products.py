@@ -96,7 +96,6 @@ TIMEOUT_HTTP = CFG.get("timeouts", {}).get("http_request", 15)
 TIMEOUT_TELEGRAM = CFG.get("timeouts", {}).get("telegram_api", 10)
 TIMEOUT_IMAGE = CFG.get("timeouts", {}).get("image_scrape", 15)
 TIMEOUT_JOB2 = CFG.get("timeouts", {}).get("job2_subprocess", 120)
-CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")
 
 # LLM enrichment (LM Studio / OpenAI-compatible)
 LLM_CFG = CFG.get("llm", {})
@@ -1081,9 +1080,9 @@ def main():
     # LLM enrichment — fills Category/Description/Why Trending/Price Range/Pin Caption
     products = llm_enrich_products(products, start_time=start_time)
 
-    # Create a fresh per-run directory and write the raw CSV into it. The
-    # legacy /tmp path is still written to as a compatibility shim for any
-    # external tooling that hardcodes it.
+    # Create a fresh per-run directory and write the raw CSV into it.
+    # All downstream stages resolve this path via HERMES_PIPELINE_RUN_ID
+    # or the `current` symlink.
     run_dir = paths.new_run_dir()
     run_csv = run_dir / paths.RAW_CSV_NAME
     paths.set_current(run_dir)
@@ -1119,14 +1118,6 @@ def main():
                 "method": p.get("method", "unknown"),
             })
 
-    # Compatibility shim: keep the legacy /tmp path populated for any external
-    # tooling that still reads CSV_PATH directly. The run-dir copy is canonical.
-    try:
-        import shutil as _shutil
-        _shutil.copy2(run_csv, CSV_PATH)
-    except Exception as _e:
-        print(f"  ⚠️ Legacy CSV shim copy failed: {_e}")
-
     manifest.set_stage(run_dir, "job1", {
         "scraped": len(products),
         "csv": str(run_csv),
@@ -1134,7 +1125,7 @@ def main():
     })
 
     # Send email report
-    send_email_report(products)
+    send_email_report(products, run_csv)
     
     # Send Telegram report
     telegram_msg = ["<b>📊 Top 20 Trending Tech Products</b>", ""]
@@ -1206,7 +1197,7 @@ def main():
     send_telegram("✅ <b>Pipeline Complete!</b> All jobs finished.")
 
 
-def send_email_report(products):
+def send_email_report(products, csv_path):
     """Send email report with products."""
     email_address = ENV.get("EMAIL_ADDRESS", "")
     email_password = ENV.get("EMAIL_PASSWORD", "")
@@ -1225,12 +1216,12 @@ def send_email_report(products):
         
         msg.attach(MIMEText(html_body, "html"))
         
-        # Attach CSV
-        with open(CSV_PATH, "rb") as f:
+        # Attach CSV (canonical copy lives in the run dir)
+        with open(csv_path, "rb") as f:
             part = MIMEBase("application", "octet-stream")
             part.set_payload(f.read())
             encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f"attachment; filename=trending_tech_products.csv")
+            part.add_header("Content-Disposition", "attachment; filename=trending_tech_products.csv")
             msg.attach(part)
         
         # Send email

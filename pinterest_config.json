@@ -24,7 +24,6 @@
     "automation_folder_id": "1w-XAxZccQ4wk4NOKwm2YDusouLvO-a6L",
     "pins_folder_id": "1p4JS0GDHVny1IBDbcSNghgKHaY_64E5D"
   },
-  "csv_path": "/tmp/trending_tech_products.csv",
   "paths": {
     "root": "~/.hermes/pinterest"
   },

@@ -17,7 +17,6 @@ import json
 import smtplib
 import subprocess
 import time
-from pathlib import Path
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -42,9 +41,7 @@ def load_config():
 
 
 CFG = load_config()
-PINS_DIR = os.path.join(HERMES_HOME, "pinterest_pins")
 BOARD_NAME = CFG.get("pinterest", {}).get("board_name", "SmartyPants2786")
-CSV_PATH = CFG.get("csv_path", "/tmp/trending_tech_products.csv")  # legacy fallback only
 MIN_PINS_GATE = CFG.get("quality_gates", {}).get("min_pins", 3)
 
 HASHTAGS = {
@@ -73,7 +70,7 @@ def _load_env_var(name):
     return ""
 
 
-def send_email_report(subject, body_text, pins_data, errors, csv_attachment_path=None):
+def send_email_report(subject, body_text, pins_data, errors, csv_attachment_path=None, pins_location=None):
     """Send detailed email report with pin summaries"""
     email_address = _load_env_var("EMAIL_ADDRESS")
     email_password = _load_env_var("EMAIL_PASSWORD")
@@ -142,12 +139,12 @@ def send_email_report(subject, body_text, pins_data, errors, csv_attachment_path
     html_body += """
         <h3>📁 Local Storage</h3>
         <p>Pin JSON files saved to: <code>{}</code></p>
-        
+
         <hr>
         <p><em>This report was generated automatically by the Pinterest Pin Generator script.</em></p>
     </body>
     </html>
-    """.format(PINS_DIR)
+    """.format(pins_location or "(run directory)")
     
     # Attach both plain text and HTML versions
     msg.attach(MIMEText(body_text, 'plain'))
@@ -185,23 +182,8 @@ def send_email_report(subject, body_text, pins_data, errors, csv_attachment_path
 
 # ── CSV Processing ──────────────────────────────────────────────────────────
 
-def resolve_input_csv(run_dir):
-    """Return the canonical raw-products CSV for this run.
-
-    Prefers <run_dir>/01_raw_products.csv; falls back to the legacy CSV_PATH
-    (/tmp/trending_tech_products.csv) so manual Job 2 invocations against an
-    older Job 1 still work.
-    """
-    if run_dir is not None:
-        run_csv = run_dir / paths.RAW_CSV_NAME
-        if run_csv.exists():
-            return str(run_csv)
-    return CSV_PATH
-
-
-def load_csv_data(csv_path=None):
-    """Load and parse the trending tech products CSV."""
-    csv_path = csv_path or CSV_PATH
+def load_csv_data(csv_path):
+    """Load and parse the trending tech products CSV from the run directory."""
     if not os.path.exists(csv_path):
         print(f"ERROR: CSV file not found at {csv_path}")
         return []
@@ -358,21 +340,6 @@ def create_pin_json(product, date_str):
     }
 
 
-def cleanup_old_pins_local():
-    """Clean up old pin files from local directory"""
-    os.makedirs(PINS_DIR, exist_ok=True)
-    
-    deleted = 0
-    try:
-        for file_path in Path(PINS_DIR).glob("*.json"):
-            file_path.unlink()
-            deleted += 1
-    except Exception as e:
-        print(f"Warning: Could not clean old pins: {e}")
-    
-    return deleted
-
-
 # ── Pinterest Bulk Upload CSV ───────────────────────────────────────────────
 
 def generate_pinterest_csv(pins_data, run_dir):
@@ -426,53 +393,49 @@ def main():
 
     print(f"📌 Pinterest Pin Generator started: {today.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    # Resolve the run dir set up by Job 1. If invoked standalone (no env, no
-    # `current` symlink), fall through to legacy CSV_PATH and create a fresh
-    # run dir so we still get a manifest for this invocation.
+    # Resolve the run dir set up by Job 1. If invoked standalone (no env and
+    # no `current` symlink), refuse rather than guess — Job 1 owns run creation.
     run_dir = paths.resolve_run_dir()
     if run_dir is None:
-        run_dir = paths.new_run_dir()
-        paths.set_current(run_dir)
-        manifest.init(run_dir)
-        print(f"  ⚠️ No upstream run id; created run dir {run_dir}")
-    else:
-        print(f"  Run id: {paths.run_id_of(run_dir)}")
+        print("❌ No run directory resolved (HERMES_PIPELINE_RUN_ID unset and no `current` symlink).")
+        print("   Run Job 1 (trending_tech_products.py) first, or set HERMES_PIPELINE_RUN_ID.")
+        sys.exit(2)
+    print(f"  Run id: {paths.run_id_of(run_dir)}")
 
-    input_csv = resolve_input_csv(run_dir)
-    products = load_csv_data(input_csv)
+    input_csv = run_dir / paths.RAW_CSV_NAME
+    products = load_csv_data(str(input_csv))
     if not products:
-        print("❌ No products found or CSV loading failed")
+        print(f"❌ No products found in {input_csv}")
         manifest.append_error(run_dir, "job2", f"input CSV missing/empty: {input_csv}")
         manifest.finalize(run_dir, "failed")
         sys.exit(2)
-    
-    # Clean up old pin files
-    deleted_count = cleanup_old_pins_local()
-    print(f"🗑️ Cleaned up {deleted_count} old pin files")
-    
+
+    pins_out_dir = paths.pins_dir(run_dir)
+    pins_out_dir.mkdir(parents=True, exist_ok=True)
+
     # Create pin files
     created = []
     errors = []
     pins_data = []
-    
+
     for product in products:
         if not product["name"]:  # Skip empty products
             continue
-            
+
         num = product["number"].zfill(2) if product["number"] else str(len(created) + 1).zfill(2)
-        filename = f"pin_{date_str}_{num}.json"
-        filepath = os.path.join(PINS_DIR, filename)
-        
+        filename = f"pin_{num}.json"
+        filepath = pins_out_dir / filename
+
         try:
             pin_data = create_pin_json(product, date_str)
-            
-            # Save JSON file locally
+
+            # Save JSON file inside the run dir
             with open(filepath, "w", encoding='utf-8') as f:
                 json.dump(pin_data, f, indent=2, ensure_ascii=False)
-            
+
             created.append((filename, product["name"]))
             pins_data.append(pin_data)
-            
+
         except Exception as e:
             errors.append((product["name"], str(e)))
     
@@ -487,7 +450,7 @@ def main():
 • New products: {len(new_products)}
 • Already procured: {len(procured_products)}
 • Errors: {len(errors)}
-• Local storage: {PINS_DIR}
+• Local storage: {pins_out_dir}
 
 🆕 NEW PRODUCTS ({len(new_products)}):"""
     
@@ -534,7 +497,8 @@ def main():
         manifest.finalize(run_dir, "failed")
         # Still send the report email so a human sees the degradation.
         email_subject = f"⚠️ Pinterest Pin Generator: only {valid_pins} pins (gate {MIN_PINS_GATE})"
-        send_email_report(email_subject, summary_text + f"\n\n🚫 {msg}", pins_data, errors, csv_attachment_path=csv_path)
+        send_email_report(email_subject, summary_text + f"\n\n🚫 {msg}", pins_data, errors,
+                          csv_attachment_path=csv_path, pins_location=str(pins_out_dir))
         sys.exit(3)
 
     # Print summary to stdout
@@ -542,7 +506,8 @@ def main():
 
     # Send detailed email report
     email_subject = f"Pinterest Pin Generator Report - {len(pins_data)} pins created ({len(new_products)} new)"
-    email_success = send_email_report(email_subject, summary_text, pins_data, errors, csv_attachment_path=csv_path)
+    email_success = send_email_report(email_subject, summary_text, pins_data, errors,
+                                      csv_attachment_path=csv_path, pins_location=str(pins_out_dir))
 
     if email_success:
         print(f"\n✅ Report complete: {len(pins_data)} pins created, detailed email sent")

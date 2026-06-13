@@ -19,7 +19,6 @@ import os
 import sys
 import smtplib
 import time
-import glob
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -64,22 +63,40 @@ def load_env():
     return env
 
 
-ZERNIO_LOG_PATH = os.path.join(HERMES_HOME, "logs", "pin_uploader.log")
-
-
 def log(message):
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # flush=True so per-line output isn't swallowed when stdout is a subprocess pipe.
     print(f"[{timestamp}] {message}", flush=True)
 
 
+_ZERNIO_LOG_PATH_CACHE: str | None = None
+
+
+def _zernio_log_path() -> str | None:
+    """Resolve the per-run Zernio log path. Cached for the process lifetime.
+
+    Returns None if no run dir is resolvable; callers then silently drop the
+    diagnostic line rather than write to a shared global log.
+    """
+    global _ZERNIO_LOG_PATH_CACHE
+    if _ZERNIO_LOG_PATH_CACHE is not None:
+        return _ZERNIO_LOG_PATH_CACHE
+    run_dir = paths.resolve_run_dir()
+    if run_dir is None:
+        return None
+    _ZERNIO_LOG_PATH_CACHE = str(paths.zernio_log_path(run_dir))
+    return _ZERNIO_LOG_PATH_CACHE
+
+
 def log_detail(message):
-    """Persist a diagnostic line to ~/.hermes/logs/pin_uploader.log so per-pin
+    """Persist a diagnostic line to <run_dir>/job3_zernio.log so per-pin
     request/response detail survives across subprocess captures."""
+    path = _zernio_log_path()
+    if path is None:
+        return
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        os.makedirs(os.path.dirname(ZERNIO_LOG_PATH), exist_ok=True)
-        with open(ZERNIO_LOG_PATH, "a", encoding="utf-8") as f:
+        with open(path, "a", encoding="utf-8") as f:
             f.write(f"[{timestamp}] {message}\n")
     except Exception:
         pass
@@ -106,27 +123,16 @@ def send_telegram(text, env):
 def find_latest_csv():
     """Locate the bulk-upload CSV for this run.
 
-    Preferred path: the per-run directory resolved via HERMES_PIPELINE_RUN_ID
-    or the `current` symlink. Falls back to legacy locations (kept so any
-    stranded CSVs from before the migration are still uploadable).
+    Resolves the per-run directory via HERMES_PIPELINE_RUN_ID or the `current`
+    symlink and returns ``<run_dir>/02_pinterest_bulk.csv`` if it exists.
     """
     run_dir = paths.resolve_run_dir()
-    if run_dir is not None:
-        run_csv = run_dir / paths.BULK_CSV_NAME
-        if run_csv.exists():
-            return str(run_csv)
-
-    # Legacy fallback: pre-migration locations.
-    patterns = [
-        os.path.join(HERMES_HOME, "pinterest_bulk_upload_*.csv"),
-        os.path.join(HERMES_HOME, "pinterest_csv", "pinterest_upload_*.csv"),
-    ]
-    files = []
-    for pattern in patterns:
-        files.extend(glob.glob(pattern))
-    if not files:
+    if run_dir is None:
         return None
-    return max(files, key=os.path.getmtime)
+    run_csv = run_dir / paths.BULK_CSV_NAME
+    if run_csv.exists():
+        return str(run_csv)
+    return None
 
 
 def count_csv_pins(csv_path):
@@ -636,20 +642,23 @@ def main():
     job3_start = time.time()
 
     run_dir = paths.resolve_run_dir()
-    if run_dir is not None:
-        log(f"Run id: {paths.run_id_of(run_dir)}")
+    if run_dir is None:
+        log("❌ No run directory resolved (HERMES_PIPELINE_RUN_ID unset and no `current` symlink).")
+        log("   Run Job 1 (trending_tech_products.py) first, or set HERMES_PIPELINE_RUN_ID.")
+        send_telegram("⚠️ Job 3: no run directory — aborting", env)
+        sys.exit(2)
+    log(f"Run id: {paths.run_id_of(run_dir)}")
 
     # Send start notification
     send_telegram("🚀 Job 3 (Pinterest Pin Uploader) starting...", env)
 
-    # Find the latest CSV from Job 2
+    # Find the bulk upload CSV from Job 2
     csv_path = find_latest_csv()
     if not csv_path:
         log("No bulk upload CSV found from Job 2. Exiting.")
         send_telegram("⚠️ Job 3: No CSV found from Job 2 — nothing to upload", env)
-        if run_dir is not None:
-            manifest.append_error(run_dir, "job3", "no bulk upload CSV found")
-            manifest.finalize(run_dir, "failed")
+        manifest.append_error(run_dir, "job3", "no bulk upload CSV found")
+        manifest.finalize(run_dir, "failed")
         return
 
     pin_count = count_csv_pins(csv_path)
@@ -661,15 +670,14 @@ def main():
     if pin_count == 0:
         log("CSV has no pins. Exiting.")
         send_telegram("⚠️ Job 3: CSV file is empty — no pins to upload", env)
-        if run_dir is not None:
-            manifest.set_stage(run_dir, "job3", {
-                "method": "skipped",
-                "uploaded": 0,
-                "csv": csv_path,
-                "reason": "empty CSV",
-                "elapsed_s": round(time.time() - job3_start, 2),
-            })
-            manifest.finalize(run_dir, "failed")
+        manifest.set_stage(run_dir, "job3", {
+            "method": "skipped",
+            "uploaded": 0,
+            "csv": csv_path,
+            "reason": "empty CSV",
+            "elapsed_s": round(time.time() - job3_start, 2),
+        })
+        manifest.finalize(run_dir, "failed")
         return
 
     # Parse CSV rows for direct API upload
@@ -766,14 +774,13 @@ Manual upload steps:
     log(f"Upload method: {'Automated' if success else 'Manual required'}")
     log("=== Pinterest Pin Uploader Complete ===")
 
-    if run_dir is not None:
-        manifest.set_stage(run_dir, "job3", {
-            "method": method,
-            "uploaded": pin_count if success else 0,
-            "csv": csv_path,
-            "elapsed_s": round(time.time() - job3_start, 2),
-        })
-        manifest.finalize(run_dir, "success" if success else "partial")
+    manifest.set_stage(run_dir, "job3", {
+        "method": method,
+        "uploaded": pin_count if success else 0,
+        "csv": csv_path,
+        "elapsed_s": round(time.time() - job3_start, 2),
+    })
+    manifest.finalize(run_dir, "success" if success else "partial")
 
     # Final summary telegram message
     send_telegram(f"📋 Job 3 SUMMARY: Processed {pin_count} pins via {method}. Pinterest pipeline complete! 🎯", env)

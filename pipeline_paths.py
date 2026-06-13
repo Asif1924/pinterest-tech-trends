@@ -6,10 +6,11 @@ Layout (single source of truth):
     ├── runs/<run_id>/
     │   ├── 01_raw_products.csv      (Job 1 output)
     │   ├── 02_pinterest_bulk.csv    (Job 2 output, Job 3 input)
+    │   ├── pins/pin_NN.json         (Job 2 per-pin payloads)
+    │   ├── job3_zernio.log          (Job 3 per-pin Zernio I/O)
     │   └── manifest.json
     ├── current -> runs/<run_id>     (symlink, updated atomically by Job 1)
-    ├── archive/                     (tar.gz of evicted runs)
-    └── logs/
+    └── archive/                     (tar.gz of evicted runs)
 
 Run identity flows Job 1 -> 2 -> 3 via the HERMES_PIPELINE_RUN_ID env var.
 When that var is missing (manual reruns), callers fall back to the `current`
@@ -23,10 +24,12 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-# ── Filename constants ──────────────────────────────────────────────────────
+# ── Filename / subdir constants ─────────────────────────────────────────────
 RAW_CSV_NAME = "01_raw_products.csv"
 BULK_CSV_NAME = "02_pinterest_bulk.csv"
 MANIFEST_NAME = "manifest.json"
+PINS_SUBDIR = "pins"
+ZERNIO_LOG_NAME = "job3_zernio.log"
 
 # ── Env-var contract between pipeline stages ────────────────────────────────
 RUN_ID_ENV = "HERMES_PIPELINE_RUN_ID"
@@ -69,16 +72,22 @@ def archive_dir() -> Path:
     return root_dir() / "archive"
 
 
-def logs_dir() -> Path:
-    return root_dir() / "logs"
-
-
 def current_link() -> Path:
     return root_dir() / "current"
 
 
+def pins_dir(run_dir: Path) -> Path:
+    """Per-run directory for the JSON pin payloads written by Job 2."""
+    return Path(run_dir) / PINS_SUBDIR
+
+
+def zernio_log_path(run_dir: Path) -> Path:
+    """Per-run Zernio request/response log written by Job 3."""
+    return Path(run_dir) / ZERNIO_LOG_NAME
+
+
 def _ensure_layout() -> None:
-    for d in (runs_dir(), archive_dir(), logs_dir()):
+    for d in (runs_dir(), archive_dir()):
         d.mkdir(parents=True, exist_ok=True)
 
 
