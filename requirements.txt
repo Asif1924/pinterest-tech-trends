@@ -10,6 +10,10 @@
 #   feedparser>=6.0       # RSS/Atom feed parsing
 #   praw>=7.7             # Reddit API (instead of scraping JSON)
 
+# Job 1 scraping engine — anti-bot + JS rendering for Amazon, TechRadar, ProductHunt, etc.
+# Without this, Amazon (the primary source of product images) silently returns 0 results.
+scrapling[fetchers]>=0.4
+
 # Pinterest pin uploader (Job 3) — browser automation
 undetected-chromedriver>=3.5.5
 playwright>=1.58              # bundled Chromium (preferred in WSL headless)
