@@ -295,9 +295,6 @@ def upload_via_browser_import(csv_path, pins, env):
     
     if browser_available:
         try:
-            # PHASE 1: Browser Setup
-            send_telegram("🔧 Job 3 Phase 1: Setting up Chrome browser options...", env)
-            
             # Set up Chrome options
             opts = Options()
             opts.binary_location = chrome_binary
@@ -307,12 +304,7 @@ def upload_via_browser_import(csv_path, pins, env):
             opts.add_argument("--window-size=1920,1080")
             # Run in headful mode for file upload to work properly
             # opts.add_argument("--headless")
-            
-            send_telegram("✅ Job 3 Phase 1: Browser options configured successfully", env)
-            
-            # PHASE 2: WebDriver Setup
-            send_telegram("🚀 Job 3 Phase 2: Starting WebDriver and launching browser...", env)
-            
+
             # Setup ChromeDriver based on browser type
             is_windows_chrome = chrome_binary.endswith(".exe")
             is_playwright_chromium = "ms-playwright" in chrome_binary
@@ -338,12 +330,7 @@ def upload_via_browser_import(csv_path, pins, env):
                 if is_playwright_chromium:
                     log("Detected Playwright Chromium - using undetected-chromedriver")
                 driver = uc.Chrome(options=opts, version_main=None, enable_bidi=False)
-            
-            send_telegram("✅ Job 3 Phase 2: Browser launched successfully", env)
-            
-            # PHASE 3: Pinterest Login
-            send_telegram("🔑 Job 3 Phase 3: Logging into Pinterest...", env)
-            
+
             # Login to Pinterest
             log("Navigating to Pinterest login...")
             driver.get("https://www.pinterest.com/login/")
@@ -368,12 +355,7 @@ def upload_via_browser_import(csv_path, pins, env):
                 EC.url_contains("pinterest.com/")
             )
             log("Login successful!")
-            
-            send_telegram("✅ Job 3 Phase 3: Pinterest login successful", env)
-            
-            # PHASE 4: Navigate to Import Content
-            send_telegram("📂 Job 3 Phase 4: Navigating to Import Content page...", env)
-            
+
             # Navigate to Import Content page
             log("Navigating to Import Content page...")
             driver.get("https://ca.pinterest.com/settings/import")
@@ -406,12 +388,7 @@ def upload_via_browser_import(csv_path, pins, env):
                     if (importLink) importLink.click();
                 """)
                 time.sleep(2)
-            
-            send_telegram("✅ Job 3 Phase 4: Successfully navigated to Import Content section", env)
-            
-            # PHASE 5: File Upload Process  
-            send_telegram("📤 Job 3 Phase 5: Locating upload controls and preparing CSV file...", env)
-            
+
             # Look for the Upload button/section
             log("Looking for Upload option...")
             upload_selectors = [
@@ -452,12 +429,7 @@ def upload_via_browser_import(csv_path, pins, env):
                 # Send the file path to the input
                 file_input.send_keys(str(csv_path))
                 time.sleep(3)
-                
-                send_telegram("✅ Job 3 Phase 5: CSV file uploaded successfully to Pinterest", env)
-                
-                # PHASE 6: Submit & Confirm
-                send_telegram("🎯 Job 3 Phase 6: Submitting upload and creating pins...", env)
-                
+
                 # Look for submit/confirm button
                 submit_selectors = [
                     "button:contains('Create')",
@@ -480,14 +452,6 @@ def upload_via_browser_import(csv_path, pins, env):
                     except:
                         continue
                 
-                if submit_clicked:
-                    send_telegram("✅ Job 3 Phase 6: Submit button clicked, processing upload...", env)
-                    
-                    # PHASE 7: Success Verification
-                    send_telegram("🔍 Job 3 Phase 7: Verifying upload success...", env)
-                else:
-                    send_telegram("⚠️ Job 3 Phase 6: Could not find submit button", env)
-                
                 # Check for success indicators
                 success_indicators = [
                     "successfully",
@@ -501,15 +465,12 @@ def upload_via_browser_import(csv_path, pins, env):
                 
                 if success:
                     log(f"✅ Successfully uploaded {len(pins)} pins via Import Content!")
-                    send_telegram(f"🎉 Job 3 Phase 7: SUCCESS! {len(pins)} pins uploaded successfully via Import Content", env)
                     return True
                 else:
                     log("⚠️ Upload completed but success not confirmed")
-                    send_telegram("❓ Job 3 Phase 7: Upload completed but success indicators not found on page", env)
                     return True
             else:
                 log("❌ File input element not found - cannot upload CSV")
-                send_telegram("❌ Job 3 Phase 5: FAILED - Could not find file upload element on Pinterest", env)
                 return False
                     
         except Exception as e:
