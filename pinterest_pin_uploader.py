@@ -19,6 +19,7 @@ import os
 import sys
 import smtplib
 import time
+import re
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -157,10 +158,54 @@ def select_zernio_board(board_name):
     return board_name
 
 
+def _parse_zernio_response(text: str):
+    """Inspect a Zernio SSE body and classify the outcome.
+
+    Returns a tuple (ok, kind, reset_at) where:
+      ok        — True only if the post was confirmed published
+      kind      — "ok" | "rate_limited" | "error" | "unknown"
+      reset_at  — datetime (UTC, tz-aware) when set, else None
+    """
+    for line in text.split("\n"):
+        if not line.startswith("data: "):
+            continue
+        try:
+            data = json.loads(line[6:])
+        except Exception:
+            continue
+        result = data.get("result", {}) or {}
+        text_blob = ""
+        for c in result.get("content", []) or []:
+            text_blob += c.get("text", "") or ""
+        if "Error: [429]" in text_blob or "Rate limit exceeded" in text_blob:
+            reset_at = None
+            m = re.search(r"resets at ([0-9T:\-]+)", text_blob)
+            if m:
+                try:
+                    reset_at = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc)
+                except Exception:
+                    reset_at = None
+            return False, "rate_limited", reset_at
+        if result.get("isError") is True:
+            return False, "error", None
+        published = "'status': 'published'" in text_blob or '"status": "published"' in text_blob
+        return (True, "ok", None) if published else (False, "error", None)
+    return False, "unknown", None
+
+
 def upload_via_zernio(csv_path, pins, env):
-    """Create pins via Zernio MCP instead of Selenium."""
+    """Create pins via Zernio MCP instead of Selenium.
+
+    Behavior:
+      - 10 s pacing between pin uploads.
+      - 1 retry per pin on rate-limit (HTTP 200 with body "Error: [429] …"):
+        sleep until the reported reset timestamp (+2 s jitter) then retry once.
+      - 1 retry per pin on HTTP 401 after a 3 s sleep.
+      - Abort early after 3 consecutive failures so the existing browser/manual
+        fallback can take over instead of burning the whole batch on a wall.
+      - Telegram heads-up only once per batch when a 429 is first observed.
+    """
     import requests
-    import json
     base = "https://mcp.zernio.com/mcp"
     key = env.get("ZERNIO_API_KEY", "")
     if not key:
@@ -173,8 +218,20 @@ def upload_via_zernio(csv_path, pins, env):
     }
     # Pinterest account ID from accounts_get
     pinterest_account_id = "6a20a6fc2b2567671abb15bf"
+
+    zcfg = CFG.get("zernio", {}) if isinstance(CFG, dict) else {}
+    pacing_seconds = zcfg.get("pacing_seconds", 10)
+    max_retries = zcfg.get("max_retries_per_pin", 1)
+    max_consecutive_failures = zcfg.get("max_consecutive_failures", 3)
+
     results = []
+    consecutive_failures = 0
+    rate_limit_notified = False
     log_detail(f"=== Zernio batch starting: {len(pins)} pins, csv={csv_path} ===")
+
+    def _post_once(payload):
+        return requests.post(base, headers=headers, json=payload, timeout=45)
+
     for idx, pin in enumerate(pins, 1):
         image_url = pin.get("image_url") or pin.get("image") or ""
         link_url = pin.get("link") or ""
@@ -203,36 +260,78 @@ def upload_via_zernio(csv_path, pins, env):
             f"pin {idx}/{len(pins)} REQUEST title={(pin.get('title') or '')!r} "
             f"image_url={image_url} link={link_url}"
         )
-        try:
-            r = requests.post(base, headers=headers, json=payload, timeout=45)
-            log(f"Zernio response: status={r.status_code}, body={r.text[:300]}")
-            log_detail(f"pin {idx}/{len(pins)} RESPONSE status={r.status_code} body={r.text}")
 
-            # Parse SSE response
-            ok = False
-            if r.status_code == 200:
-                for line in r.text.split('\n'):
-                    if line.startswith('data: '):
-                        try:
-                            data = json.loads(line[6:])
-                            result = data.get('result', {}) or {}
-                            if result.get('isError') is True:
-                                ok = False
-                            else:
-                                # Confirm the post actually published
-                                text_blob = ""
-                                for c in result.get('content', []) or []:
-                                    text_blob += c.get('text', '') or ''
-                                ok = "'status': 'published'" in text_blob or '"status": "published"' in text_blob
-                            break
-                        except Exception:
-                            pass
-            log_detail(f"pin {idx}/{len(pins)} PARSED ok={ok}")
-            results.append((pin, ok, r.text[:200]))
-        except Exception as e:
-            log(f"Zernio request failed: {e}")
-            log_detail(f"pin {idx}/{len(pins)} REQUEST_EXCEPTION {e!r}")
-            results.append((pin, False, str(e)))
+        ok = False
+        last_body = ""
+        for attempt in range(max_retries + 1):
+            try:
+                r = _post_once(payload)
+                last_body = r.text
+                log(f"Zernio response: status={r.status_code}, body={r.text[:300]}")
+                log_detail(
+                    f"pin {idx}/{len(pins)} attempt={attempt + 1} "
+                    f"RESPONSE status={r.status_code} body={r.text}"
+                )
+
+                if r.status_code == 401:
+                    if attempt < max_retries:
+                        log_detail(f"pin {idx}/{len(pins)} HTTP 401 — sleeping 3s before retry")
+                        time.sleep(3)
+                        continue
+                    break
+
+                if r.status_code != 200:
+                    break
+
+                parsed_ok, kind, reset_at = _parse_zernio_response(r.text)
+                log_detail(
+                    f"pin {idx}/{len(pins)} PARSED ok={parsed_ok} kind={kind} reset_at={reset_at}"
+                )
+                if parsed_ok:
+                    ok = True
+                    break
+                if kind == "rate_limited" and attempt < max_retries:
+                    if not rate_limit_notified:
+                        send_telegram(
+                            f"⏳ Job 3: Zernio rate-limited, backing off until "
+                            f"{reset_at.strftime('%H:%M:%S') if reset_at else 'next window'}",
+                            env,
+                        )
+                        rate_limit_notified = True
+                    now = datetime.now(timezone.utc)
+                    if reset_at is not None:
+                        sleep_s = max(0.0, (reset_at - now).total_seconds()) + 2.0
+                    else:
+                        sleep_s = 60.0
+                    log_detail(
+                        f"pin {idx}/{len(pins)} RATE_LIMITED reset_at={reset_at} "
+                        f"sleeping {sleep_s:.1f}s"
+                    )
+                    time.sleep(sleep_s)
+                    continue
+                break
+            except Exception as e:
+                log(f"Zernio request failed: {e}")
+                log_detail(f"pin {idx}/{len(pins)} attempt={attempt + 1} REQUEST_EXCEPTION {e!r}")
+                last_body = str(e)
+                break
+
+        results.append((pin, ok, last_body[:200]))
+        if ok:
+            consecutive_failures = 0
+        else:
+            consecutive_failures += 1
+            if consecutive_failures >= max_consecutive_failures:
+                log_detail(
+                    f"aborting batch after {consecutive_failures} consecutive failures "
+                    f"(processed {idx}/{len(pins)})"
+                )
+                log(f"⚠️ Zernio: aborting batch after {consecutive_failures} consecutive failures")
+                break
+
+        if idx < len(pins):
+            time.sleep(pacing_seconds)
+
     success_count = sum(1 for _, ok, _ in results if ok)
     log(f"✅ Zernio upload complete: {success_count}/{len(results)} pins created")
     return success_count == len(results) and len(results) > 0
