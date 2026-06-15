@@ -1,6 +1,6 @@
 {
   "name": "Pinterest Pin Generator",
-  "schedule": "30 */6 * * *",
+  "schedule": "",
   "enabled": false,
   "script": "pinterest_pin_generator.sh",
   "deliver": "telegram",

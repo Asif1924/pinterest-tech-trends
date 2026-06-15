@@ -1,6 +1,6 @@
 {
   "name": "Pinterest Pin Uploader",
-  "schedule": "0 1,7,13,19 * * *",
+  "schedule": "",
   "enabled": false,
   "script": "pinterest_pin_uploader.sh",
   "deliver": "telegram",

@@ -240,10 +240,13 @@ PY
     SCHEDULE=$(sed -n '2p' <<<"$CONFIG_SUMMARY")
     SCRIPT=$(sed -n '3p' <<<"$CONFIG_SUMMARY")
 
-    if [[ -z "$JOB_NAME" ]] || [[ -z "$SCHEDULE" ]] || [[ -z "$SCRIPT" ]]; then
+    if [[ -z "$JOB_NAME" ]] || [[ -z "$SCRIPT" ]]; then
         echo "   ⚠ Skipping $CONFIG_FILE (invalid format)"
         continue
     fi
+    # Empty schedule means "no cron schedule" — the job stays in jobs.json
+    # for manual invocation (hermes cron run <id>) or for subprocess-chaining
+    # from a parent job, but the scheduler will never fire it on its own.
 
     # Look up the existing job by name OR by script basename (jobs.json may
     # store the absolute path, while configs store just the filename).
@@ -266,10 +269,11 @@ PY
     ) || JOB_ID=""
 
     if [[ "$DRY_RUN" == true ]]; then
+        SCHED_DISPLAY="${SCHEDULE:-<none>}"
         if [[ -n "$JOB_ID" ]]; then
-            echo "   [would update] $JOB_NAME ($JOB_ID) → schedule: $SCHEDULE"
+            echo "   [would update] $JOB_NAME ($JOB_ID) → schedule: $SCHED_DISPLAY"
         else
-            echo "   [would create] $JOB_NAME → schedule: $SCHEDULE"
+            echo "   [would create] $JOB_NAME → schedule: $SCHED_DISPLAY"
         fi
         continue
     fi
@@ -294,8 +298,16 @@ for job in data.get("jobs", []):
     if job["id"] == job_id:
         job["prompt"] = config["prompt"]
         job["script"] = config.get("script", "")
-        job["schedule"] = {"kind": "cron", "expr": config["schedule"], "display": config["schedule"]}
-        job["schedule_display"] = config["schedule"]
+        # Empty schedule -> clear the cron expression in jobs.json. The job entry
+        # stays so it can be invoked manually, but the scheduler skips it.
+        sched_expr = config.get("schedule") or ""
+        if sched_expr:
+            job["schedule"] = {"kind": "cron", "expr": sched_expr, "display": sched_expr}
+            job["schedule_display"] = sched_expr
+        else:
+            job["schedule"] = {"kind": "cron", "expr": "", "display": ""}
+            job["schedule_display"] = ""
+            job["next_run_at"] = None
         if "deliver" in config:
             job["deliver"] = config["deliver"]
         if "enabled" in config:
